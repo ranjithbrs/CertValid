@@ -1,0 +1,201 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Verification Result — CertValid</title>
+  <meta name="description" content="Certificate verification result showing authenticity status and details.">
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+
+<!-- Navbar -->
+<nav class="navbar">
+  <div class="navbar-brand">
+    <div class="logo-icon">🛡️</div>
+    CertValid
+  </div>
+  <div class="navbar-links">
+    <a href="{{ url_for('index') }}">Verify</a>
+    <a href="{{ url_for('admin') }}">Admin</a>
+  </div>
+</nav>
+
+<div class="page-wrapper">
+  <div class="container">
+
+    {% set status_upper = status | upper %}
+
+    <!-- Result Hero Banner -->
+    {% if status_upper == 'AUTHENTIC' %}
+      <div class="result-hero authentic fade-in-up">
+        <div class="result-icon">✅</div>
+        <div class="result-title" style="color: var(--emerald-light);">Certificate Authentic</div>
+        <p class="result-reason">{{ reason }}</p>
+        <div style="margin-top:1rem;">
+          <span class="badge badge-authentic">
+            <span class="pulse-dot pulse-green"></span> AUTHENTIC
+          </span>
+        </div>
+      </div>
+    {% elif status_upper == 'REVOKED' %}
+      <div class="result-hero revoked fade-in-up">
+        <div class="result-icon">🚫</div>
+        <div class="result-title" style="color: var(--amber-light);">Certificate Revoked</div>
+        <p class="result-reason">{{ reason }}</p>
+        <div style="margin-top:1rem;">
+          <span class="badge badge-revoked">
+            <span class="pulse-dot pulse-amber"></span> REVOKED
+          </span>
+        </div>
+      </div>
+    {% else %}
+      <div class="result-hero invalid fade-in-up">
+        <div class="result-icon">❌</div>
+        <div class="result-title" style="color: var(--red-light);">Verification Failed</div>
+        <p class="result-reason">{{ reason }}</p>
+        <div style="margin-top:1rem;">
+          <span class="badge badge-invalid">
+            <span class="pulse-dot pulse-red"></span> INVALID
+          </span>
+        </div>
+      </div>
+    {% endif %}
+
+    <!-- Certificate Details -->
+    {% if cert %}
+    <div class="card fade-in-up" style="animation-delay:.1s; margin-bottom:1.5rem;">
+      <div class="section-header">
+        <span class="section-title">📋 Certificate Details</span>
+        {% if status_upper == 'AUTHENTIC' and cert.cert_id %}
+          <a href="{{ url_for('download_cert', cert_id=cert.cert_id) }}" class="btn btn-success btn-sm">
+            ⬇️ Download Certificate
+          </a>
+        {% endif %}
+      </div>
+      <div class="info-grid">
+        <div class="info-card">
+          <div class="info-card-label">Certificate ID</div>
+          <div class="info-card-value">
+            <span class="cert-id-display">{{ cert.cert_id }}</span>
+          </div>
+        </div>
+        <div class="info-card">
+          <div class="info-card-label">Recipient Name</div>
+          <div class="info-card-value">{{ cert.student_name }}</div>
+        </div>
+        <div class="info-card">
+          <div class="info-card-label">Course / Programme</div>
+          <div class="info-card-value">{{ cert.course_name }}</div>
+        </div>
+        <div class="info-card">
+          <div class="info-card-label">Issuing Authority</div>
+          <div class="info-card-value">{{ cert.issuer_name }}</div>
+        </div>
+        <div class="info-card">
+          <div class="info-card-label">Issue Date</div>
+          <div class="info-card-value">{{ cert.issue_date }}</div>
+        </div>
+        <div class="info-card">
+          <div class="info-card-label">Certificate Status</div>
+          <div class="info-card-value">
+            {% if cert.status == 'active' %}
+              <span class="badge badge-active">Active</span>
+            {% else %}
+              <span class="badge badge-revoked">{{ cert.status | title }}</span>
+            {% endif %}
+          </div>
+        </div>
+      </div>
+    </div>
+    {% endif %}
+
+    <!-- Cryptographic Audit -->
+    <div class="card fade-in-up" style="animation-delay:.2s; margin-bottom:1.5rem;">
+      <div class="section-header">
+        <span class="section-title">🔐 Cryptographic Audit</span>
+      </div>
+
+      {% if computed_hash %}
+        <div class="form-group">
+          <div class="form-label">Computed SHA-256 Hash (uploaded file)</div>
+          <div class="hash-block">{{ computed_hash }}</div>
+        </div>
+      {% endif %}
+
+      {% if cert and cert.file_hash %}
+        <div class="form-group">
+          <div class="form-label">Registry SHA-256 Hash</div>
+          <div class="hash-block">{{ cert.file_hash }}</div>
+        </div>
+
+        {% if computed_hash %}
+          <div style="margin-top:.5rem; padding:.75rem 1rem; border-radius:8px; font-size:.9rem; font-weight:600;
+            {% if computed_hash == cert.file_hash %}
+              background: rgba(16,185,129,0.10); color: var(--emerald-light); border: 1px solid rgba(16,185,129,0.25);
+            {% else %}
+              background: rgba(239,68,68,0.10); color: var(--red-light); border: 1px solid rgba(239,68,68,0.25);
+            {% endif %}
+          ">
+            {% if computed_hash == cert.file_hash %}
+              ✅ Hashes match — file is byte-perfect and unmodified.
+            {% else %}
+              ⚠️ Hash mismatch — file content differs from registered copy.
+            {% endif %}
+          </div>
+        {% endif %}
+      {% endif %}
+
+      {% if not computed_hash and not (cert and cert.file_hash) %}
+        <p style="color:var(--text-dim); font-size:.9rem;">
+          Verification was performed using Certificate ID lookup (no file hash computed).
+        </p>
+      {% endif %}
+    </div>
+
+    <!-- Verification Metadata -->
+    <div class="card fade-in-up" style="animation-delay:.3s; margin-bottom:2rem;">
+      <div class="section-header">
+        <span class="section-title">📅 Verification Metadata</span>
+      </div>
+      <div class="info-grid">
+        <div class="info-card">
+          <div class="info-card-label">Verified At</div>
+          <div class="info-card-value">{{ verified_at }}</div>
+        </div>
+        <div class="info-card">
+          <div class="info-card-label">Verification Method</div>
+          <div class="info-card-value">
+            {% if mode == 'file' %}📄 File Hash{% else %}🔍 Certificate ID{% endif %}
+          </div>
+        </div>
+        <div class="info-card">
+          <div class="info-card-label">Result</div>
+          <div class="info-card-value">
+            {% if status_upper == 'AUTHENTIC' %}
+              <span class="badge badge-authentic">Authentic</span>
+            {% elif status_upper == 'REVOKED' %}
+              <span class="badge badge-revoked">Revoked</span>
+            {% else %}
+              <span class="badge badge-invalid">Invalid</span>
+            {% endif %}
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Action Buttons -->
+    <div style="display:flex; gap:1rem; flex-wrap:wrap;" class="fade-in-up" style="animation-delay:.4s;">
+      <a href="{{ url_for('index') }}" class="btn btn-primary">
+        🔄 Verify Another Certificate
+      </a>
+      <button onclick="window.print()" class="btn btn-ghost">
+        🖨️ Print Report
+      </button>
+    </div>
+
+  </div><!-- /container -->
+</div><!-- /page-wrapper -->
+
+</body>
+</html>

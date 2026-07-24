@@ -1,0 +1,349 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Admin Dashboard — CertValid</title>
+  <meta name="description" content="Admin dashboard to issue, manage, and audit certificates.">
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+
+{% if not logged_in %}
+<!-- ─── Admin Login Page ─────────────────────────────────────── -->
+<nav class="navbar">
+  <div class="navbar-brand">
+    <div class="logo-icon">🛡️</div>
+    CertValid
+  </div>
+  <div class="navbar-links">
+    <a href="{{ url_for('index') }}">← Back to Verify</a>
+  </div>
+</nav>
+
+<div class="admin-login-wrap">
+  <div class="admin-login-card fade-in-up">
+    <div class="card">
+      <div style="text-align:center; margin-bottom:2rem;">
+        <div style="font-size:2.5rem; margin-bottom:.75rem;">🔐</div>
+        <h1 style="font-size:1.5rem; margin-bottom:.5rem;">Admin Login</h1>
+        <p style="color:var(--text-muted); font-size:.9rem;">Manage certificates, issue new ones, and view audit logs.</p>
+      </div>
+
+      {% with messages = get_flashed_messages(with_categories=true) %}
+        {% if messages %}
+          <ul class="flash-list">
+            {% for category, message in messages %}
+              <li class="flash flash-{{ category }}">
+                {% if category == 'success' %}✅{% elif category == 'error' %}❌{% else %}⚠️{% endif %}
+                {{ message }}
+              </li>
+            {% endfor %}
+          </ul>
+        {% endif %}
+      {% endwith %}
+
+      <form method="POST" action="{{ url_for('admin') }}">
+        <input type="hidden" name="action" value="login">
+        <div class="form-group">
+          <label class="form-label" for="username">Username</label>
+          <input type="text" id="username" name="username" class="form-control" placeholder="admin" required autocomplete="username">
+        </div>
+        <div class="form-group">
+          <label class="form-label" for="password">Password</label>
+          <input type="password" id="password" name="password" class="form-control" placeholder="••••••••" required autocomplete="current-password">
+        </div>
+        <button type="submit" class="btn btn-primary btn-full btn-lg" style="margin-top:.5rem;">
+          🔑 Sign In
+        </button>
+      </form>
+
+      <p style="text-align:center; margin-top:1.5rem; font-size:.8rem; color:var(--text-dim);">
+        Default credentials: <code>admin</code> / <code>admin123</code>
+      </p>
+    </div>
+  </div>
+</div>
+
+{% else %}
+<!-- ─── Admin Dashboard ────────────────────────────────────────── -->
+<nav class="navbar">
+  <div class="navbar-brand">
+    <div class="logo-icon">🛡️</div>
+    CertValid Admin
+  </div>
+  <div class="navbar-links">
+    <a href="{{ url_for('index') }}">🔍 Public Portal</a>
+    <a href="{{ url_for('admin_logout') }}" class="btn btn-ghost btn-sm">🚪 Logout</a>
+  </div>
+</nav>
+
+<div class="page-wrapper">
+  <div class="container">
+
+    <!-- Flash Messages -->
+    {% with messages = get_flashed_messages(with_categories=true) %}
+      {% if messages %}
+        <ul class="flash-list">
+          {% for category, message in messages %}
+            <li class="flash flash-{{ category }}">
+              {% if category == 'success' %}✅{% elif category == 'error' %}❌{% else %}⚠️{% endif %}
+              {{ message }}
+            </li>
+          {% endfor %}
+        </ul>
+      {% endif %}
+    {% endwith %}
+
+    <!-- Dashboard Header -->
+    <div style="margin-bottom:2rem; display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:1rem;">
+      <div>
+        <h1 style="font-size:1.7rem; margin-bottom:.25rem;">Admin Dashboard</h1>
+        <p style="color:var(--text-muted); font-size:.9rem;">Manage the certificate registry and audit logs.</p>
+      </div>
+      <button class="btn btn-primary" onclick="showTab('issue')">+ Issue New Certificate</button>
+    </div>
+
+    <!-- Stats Grid -->
+    {% if stats %}
+    <div class="stats-grid fade-in-up">
+      <div class="stat-card">
+        <div class="stat-value">{{ stats.total_certs }}</div>
+        <div class="stat-label">Total Issued</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-value" style="background: linear-gradient(135deg,var(--emerald-light),#34d399); -webkit-background-clip:text;">{{ stats.active_certs }}</div>
+        <div class="stat-label">Active Certs</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-value" style="background: linear-gradient(135deg,var(--amber-light),var(--amber)); -webkit-background-clip:text;">{{ stats.revoked_certs }}</div>
+        <div class="stat-label">Revoked</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-value">{{ stats.total_verifications }}</div>
+        <div class="stat-label">Verifications</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-value" style="background: linear-gradient(135deg,var(--emerald-light),#34d399); -webkit-background-clip:text;">{{ stats.authentic_verifications }}</div>
+        <div class="stat-label">Authentic</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-value" style="background: linear-gradient(135deg,var(--red-light),var(--red)); -webkit-background-clip:text;">{{ stats.invalid_verifications }}</div>
+        <div class="stat-label">Invalid / Failed</div>
+      </div>
+    </div>
+    {% endif %}
+
+    <!-- Admin Tab Nav -->
+    <div class="admin-tabs">
+      <button class="admin-tab active" id="tab-overview-btn"  onclick="showTab('overview')">📊 Overview</button>
+      <button class="admin-tab" id="tab-issue-btn"    onclick="showTab('issue')">➕ Issue Certificate</button>
+      <button class="admin-tab" id="tab-registry-btn" onclick="showTab('registry')">📋 Registry</button>
+      <button class="admin-tab" id="tab-logs-btn"     onclick="showTab('logs')">📜 Audit Logs</button>
+    </div>
+
+    <!-- ── Overview Tab ── -->
+    <div class="admin-tab-pane" id="tab-overview">
+      <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(260px,1fr)); gap:1.5rem;">
+        <div class="card">
+          <h3 style="margin-bottom:1rem; font-size:1rem;">Quick Actions</h3>
+          <div style="display:flex; flex-direction:column; gap:.75rem;">
+            <button class="btn btn-primary" onclick="showTab('issue')">➕ Issue New Certificate</button>
+            <button class="btn btn-ghost" onclick="showTab('registry')">📋 View Registry</button>
+            <button class="btn btn-ghost" onclick="showTab('logs')">📜 View Audit Logs</button>
+            <a href="{{ url_for('index') }}" class="btn btn-ghost">🔍 Public Verification Portal</a>
+          </div>
+        </div>
+        <div class="card">
+          <h3 style="margin-bottom:1rem; font-size:1rem;">System Info</h3>
+          <div style="display:flex; flex-direction:column; gap:.75rem; font-size:.88rem; color:var(--text-muted);">
+            <div>🔐 Hash Algorithm: <strong style="color:var(--text);">SHA-256</strong></div>
+            <div>🗄️ Database: <strong style="color:var(--text);">SQLite</strong></div>
+            <div>🌐 Framework: <strong style="color:var(--text);">Flask</strong></div>
+            <div>📦 Supported Formats: <strong style="color:var(--text);">JPG, PNG, PDF</strong></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── Issue Certificate Tab ── -->
+    <div class="admin-tab-pane" id="tab-issue" style="display:none;">
+      <div class="card" style="max-width:620px;">
+        <div class="section-header">
+          <span class="section-title">➕ Issue New Certificate</span>
+        </div>
+        <form method="POST" action="{{ url_for('admin_issue') }}">
+          <div class="form-group">
+            <label class="form-label" for="student_name">Recipient Full Name</label>
+            <input type="text" id="student_name" name="student_name" class="form-control" placeholder="e.g. Aisha Sharma" required>
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="course_name">Course / Programme</label>
+            <input type="text" id="course_name" name="course_name" class="form-control" placeholder="e.g. B.Tech Computer Science" required>
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="issuer_name">Issuing Authority</label>
+            <input type="text" id="issuer_name" name="issuer_name" class="form-control" placeholder="e.g. National Institute of Technology" required>
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="issue_date">Issue Date</label>
+            <input type="date" id="issue_date" name="issue_date" class="form-control" required>
+          </div>
+          <button type="submit" class="btn btn-success btn-full btn-lg" style="margin-top:.5rem;">
+            🎓 Generate & Issue Certificate
+          </button>
+        </form>
+        <p style="font-size:.8rem; color:var(--text-dim); margin-top:1rem; text-align:center;">
+          A unique Certificate ID and SHA-256 hash will be generated. A downloadable certificate image with embedded QR code will also be created.
+        </p>
+      </div>
+    </div>
+
+    <!-- ── Registry Tab ── -->
+    <div class="admin-tab-pane" id="tab-registry" style="display:none;">
+      <div class="section-header">
+        <span class="section-title">📋 Certificate Registry</span>
+        <span style="font-size:.85rem; color:var(--text-muted);">{{ certs|length }} certificates total</span>
+      </div>
+
+      {% if certs %}
+      <div class="table-wrapper">
+        <table>
+          <thead>
+            <tr>
+              <th>Certificate ID</th>
+              <th>Recipient</th>
+              <th>Course</th>
+              <th>Issuer</th>
+              <th>Issue Date</th>
+              <th>Status</th>
+              <th>Actions</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for cert in certs %}
+            <tr>
+              <td><span class="cert-id-display">{{ cert.cert_id }}</span></td>
+              <td>{{ cert.student_name }}</td>
+              <td style="color:var(--text-muted);">{{ cert.course_name }}</td>
+              <td style="color:var(--text-muted); font-size:.82rem;">{{ cert.issuer_name }}</td>
+              <td style="color:var(--text-muted);">{{ cert.issue_date }}</td>
+              <td>
+                {% if cert.status == 'active' %}
+                  <span class="badge badge-active">Active</span>
+                {% else %}
+                  <span class="badge badge-revoked">Revoked</span>
+                {% endif %}
+              </td>
+              <td>
+                <div style="display:flex; gap:.5rem; flex-wrap:wrap;">
+                  <a href="{{ url_for('verify_by_id', cert_id=cert.cert_id) }}" target="_blank" class="btn btn-ghost btn-sm">🔍</a>
+                  <a href="{{ url_for('download_cert', cert_id=cert.cert_id) }}" class="btn btn-ghost btn-sm">⬇️</a>
+                  {% if cert.status == 'active' %}
+                    <form method="POST" action="{{ url_for('admin_revoke', cert_id=cert.cert_id) }}" onsubmit="return confirm('Revoke certificate {{ cert.cert_id }}?')">
+                      <button type="submit" class="btn btn-danger btn-sm">🚫 Revoke</button>
+                    </form>
+                  {% else %}
+                    <form method="POST" action="{{ url_for('admin_reactivate', cert_id=cert.cert_id) }}">
+                      <button type="submit" class="btn btn-success btn-sm">✅ Reactivate</button>
+                    </form>
+                  {% endif %}
+                </div>
+              </td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      {% else %}
+        <div class="card" style="text-align:center; padding:3rem;">
+          <div style="font-size:2.5rem; margin-bottom:1rem;">📭</div>
+          <p style="color:var(--text-muted);">No certificates in the registry yet.</p>
+          <button class="btn btn-primary" style="margin-top:1rem;" onclick="showTab('issue')">+ Issue First Certificate</button>
+        </div>
+      {% endif %}
+    </div>
+
+    <!-- ── Audit Logs Tab ── -->
+    <div class="admin-tab-pane" id="tab-logs" style="display:none;">
+      <div class="section-header">
+        <span class="section-title">📜 Verification Audit Logs</span>
+        <span style="font-size:.85rem; color:var(--text-muted);">Last {{ logs|length }} entries</span>
+      </div>
+
+      {% if logs %}
+      <div class="table-wrapper">
+        <table>
+          <thead>
+            <tr>
+              <th>#</th>
+              <th>Timestamp</th>
+              <th>Certificate ID</th>
+              <th>File</th>
+              <th>Status</th>
+              <th>Reason</th>
+              <th>IP</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for log in logs %}
+            <tr>
+              <td style="color:var(--text-dim); font-size:.78rem;">{{ log.id }}</td>
+              <td style="font-size:.82rem; color:var(--text-muted);">{{ log.verified_at }}</td>
+              <td>
+                {% if log.cert_id %}
+                  <span class="cert-id-display">{{ log.cert_id }}</span>
+                {% else %}
+                  <span style="color:var(--text-dim);">—</span>
+                {% endif %}
+              </td>
+              <td style="font-size:.82rem; color:var(--text-muted);">{{ log.file_name or '—' }}</td>
+              <td>
+                {% if log.status == 'AUTHENTIC' %}
+                  <span class="badge badge-authentic">{{ log.status }}</span>
+                {% elif log.status == 'REVOKED' %}
+                  <span class="badge badge-revoked">{{ log.status }}</span>
+                {% else %}
+                  <span class="badge badge-invalid">{{ log.status }}</span>
+                {% endif %}
+              </td>
+              <td style="font-size:.82rem; color:var(--text-muted); max-width:220px;">{{ log.reason }}</td>
+              <td style="font-size:.78rem; color:var(--text-dim);">{{ log.ip_address or '—' }}</td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      {% else %}
+        <div class="card" style="text-align:center; padding:3rem;">
+          <div style="font-size:2.5rem; margin-bottom:1rem;">📋</div>
+          <p style="color:var(--text-muted);">No verification attempts logged yet.</p>
+        </div>
+      {% endif %}
+    </div>
+
+  </div><!-- /container -->
+</div><!-- /page-wrapper -->
+{% endif %}
+
+<script>
+  // Admin tab switching
+  function showTab(tabName) {
+    document.querySelectorAll('.admin-tab-pane').forEach(p => p.style.display = 'none');
+    document.querySelectorAll('.admin-tab').forEach(b => b.classList.remove('active'));
+    const pane = document.getElementById('tab-' + tabName);
+    const btn  = document.getElementById('tab-' + tabName + '-btn');
+    if (pane) pane.style.display = 'block';
+    if (btn)  btn.classList.add('active');
+  }
+
+  // Check URL param for active tab
+  (function() {
+    const params = new URLSearchParams(window.location.search);
+    const tab = params.get('tab');
+    if (tab) showTab(tab);
+  })();
+</script>
+
+</body>
+</html>

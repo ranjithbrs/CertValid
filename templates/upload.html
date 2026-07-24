@@ -1,0 +1,189 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>CertValid — Certificate Verification System</title>
+  <meta name="description" content="Instantly verify the authenticity of academic and professional certificates using cryptographic SHA-256 hash verification.">
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+
+<!-- Navbar -->
+<nav class="navbar">
+  <div class="navbar-brand">
+    <div class="logo-icon">🛡️</div>
+    CertValid
+  </div>
+  <div class="navbar-links">
+    <a href="{{ url_for('index') }}">Verify</a>
+    <a href="{{ url_for('admin') }}">Admin</a>
+  </div>
+</nav>
+
+<div class="page-wrapper">
+  <div class="container">
+
+    <!-- Flash Messages -->
+    {% with messages = get_flashed_messages(with_categories=true) %}
+      {% if messages %}
+        <ul class="flash-list">
+          {% for category, message in messages %}
+            <li class="flash flash-{{ category }}">
+              {% if category == 'success' %}✅{% elif category == 'error' %}❌{% else %}⚠️{% endif %}
+              {{ message }}
+            </li>
+          {% endfor %}
+        </ul>
+      {% endif %}
+    {% endwith %}
+
+    <!-- Hero -->
+    <div class="hero fade-in-up">
+      <div class="hero-badge">
+        <span>🔐</span> Cryptographic Verification
+      </div>
+      <h1 class="hero-title">
+        Verify Certificate<br><span class="highlight">Authenticity Instantly</span>
+      </h1>
+      <p class="hero-subtitle">
+        Upload a certificate file or enter a Certificate ID to instantly verify its authenticity using SHA-256 cryptographic hash matching.
+      </p>
+    </div>
+
+    <!-- Verification Card -->
+    <div class="card fade-in-up" style="max-width: 640px; margin: 0 auto; animation-delay:.1s;">
+
+      <!-- Tab Switch -->
+      <div class="tabs">
+        <button class="tab-btn active" id="tab-file-btn" onclick="switchTab('file')">📄 Upload File</button>
+        <button class="tab-btn" id="tab-id-btn" onclick="switchTab('id')">🔍 Search by ID</button>
+      </div>
+
+      <!-- File Upload Tab -->
+      <div class="tab-pane active" id="tab-file">
+        <form action="{{ url_for('verify') }}" method="POST" enctype="multipart/form-data">
+          <input type="hidden" name="mode" value="file">
+          <div class="dropzone" id="dropzone">
+            <input type="file" name="certificate" id="file-input" accept=".jpg,.jpeg,.png,.pdf" required>
+            <div class="dropzone-icon">📁</div>
+            <div class="dropzone-text">
+              <strong>Click to browse</strong> or drag & drop your file
+            </div>
+            <div class="dropzone-hint">Supported formats: JPG, PNG, PDF &nbsp;·&nbsp; Max size: 10 MB</div>
+            <div class="dropzone-preview" id="file-preview">📎 <span id="file-name"></span></div>
+          </div>
+          <br>
+          <button type="submit" class="btn btn-primary btn-full btn-lg">
+            🔍 Verify Certificate
+          </button>
+        </form>
+      </div>
+
+      <!-- Cert ID Tab -->
+      <div class="tab-pane" id="tab-id">
+        <form action="{{ url_for('verify') }}" method="POST">
+          <input type="hidden" name="mode" value="id">
+          <div class="form-group">
+            <label class="form-label" for="cert-id-input">Certificate ID</label>
+            <input
+              type="text"
+              id="cert-id-input"
+              name="cert_id"
+              class="form-control"
+              placeholder="e.g. CERT-2024-001"
+              required
+              autocomplete="off"
+              style="text-transform: uppercase; letter-spacing: 0.05em;"
+            >
+          </div>
+          <p style="font-size:.82rem; color:var(--text-dim); margin-bottom:1rem;">
+            The Certificate ID is printed on your certificate document or can be found via the QR code.
+          </p>
+          <button type="submit" class="btn btn-primary btn-full btn-lg">
+            🔍 Lookup Certificate
+          </button>
+        </form>
+      </div>
+
+    </div><!-- /card -->
+
+    <!-- Feature Chips -->
+    <div class="feature-chips fade-in-up" style="animation-delay:.2s;">
+      <span class="feature-chip"><span class="chip-icon">🔒</span> SHA-256 Encryption</span>
+      <span class="feature-chip"><span class="chip-icon">⚡</span> Instant Results</span>
+      <span class="feature-chip"><span class="chip-icon">🔎</span> Tamper Detection</span>
+      <span class="feature-chip"><span class="chip-icon">📱</span> QR Code Support</span>
+      <span class="feature-chip"><span class="chip-icon">🗄️</span> Secure Registry</span>
+    </div>
+
+    <!-- How It Works -->
+    <div style="margin-top:4rem; text-align:center;">
+      <h2 style="font-size:1.3rem; color:var(--text-muted); margin-bottom:2rem;">How It Works</h2>
+      <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(200px,1fr)); gap:1.25rem; text-align:left;">
+        <div class="card" style="animation-delay:.3s;">
+          <div style="font-size:2rem; margin-bottom:.75rem;">📤</div>
+          <h3 style="font-size:1rem; margin-bottom:.5rem;">1. Upload or Enter ID</h3>
+          <p style="font-size:.85rem; color:var(--text-muted);">Upload your certificate image/PDF or type in the Certificate ID printed on the document.</p>
+        </div>
+        <div class="card" style="animation-delay:.4s;">
+          <div style="font-size:2rem; margin-bottom:.75rem;">⚙️</div>
+          <h3 style="font-size:1rem; margin-bottom:.5rem;">2. Cryptographic Check</h3>
+          <p style="font-size:.85rem; color:var(--text-muted);">Our system computes a SHA-256 hash of the uploaded file and matches it against the secure registry.</p>
+        </div>
+        <div class="card" style="animation-delay:.5s;">
+          <div style="font-size:2rem; margin-bottom:.75rem;">✅</div>
+          <h3 style="font-size:1rem; margin-bottom:.5rem;">3. Instant Verdict</h3>
+          <p style="font-size:.85rem; color:var(--text-muted);">Get an immediate, detailed verification report showing authenticity status, issuer info, and audit trail.</p>
+        </div>
+      </div>
+    </div>
+
+  </div><!-- /container -->
+</div><!-- /page-wrapper -->
+
+<script>
+  // Tab switching
+  function switchTab(tab) {
+    document.querySelectorAll('.tab-pane').forEach(p => p.classList.remove('active'));
+    document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+    document.getElementById('tab-' + tab).classList.add('active');
+    document.getElementById('tab-' + tab + '-btn').classList.add('active');
+  }
+
+  // Dropzone interactivity
+  const dropzone = document.getElementById('dropzone');
+  const fileInput = document.getElementById('file-input');
+  const preview  = document.getElementById('file-preview');
+  const fileName  = document.getElementById('file-name');
+
+  fileInput.addEventListener('change', () => {
+    if (fileInput.files.length) {
+      fileName.textContent = fileInput.files[0].name;
+      preview.style.display = 'block';
+    }
+  });
+
+  dropzone.addEventListener('dragover', e => { e.preventDefault(); dropzone.classList.add('dragover'); });
+  dropzone.addEventListener('dragleave', () => dropzone.classList.remove('dragover'));
+  dropzone.addEventListener('drop', e => {
+    e.preventDefault();
+    dropzone.classList.remove('dragover');
+    const files = e.dataTransfer.files;
+    if (files.length) {
+      fileInput.files = files;
+      fileName.textContent = files[0].name;
+      preview.style.display = 'block';
+    }
+  });
+
+  // Auto-uppercase cert ID input
+  const certIdInput = document.getElementById('cert-id-input');
+  if (certIdInput) {
+    certIdInput.addEventListener('input', () => {
+      certIdInput.value = certIdInput.value.toUpperCase();
+    });
+  }
+</script>
+</body>
+</html>
