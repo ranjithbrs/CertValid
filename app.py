@@ -296,8 +296,17 @@ def download_cert(cert_id):
     cert_id = cert_id.strip().upper()
     cert_path = os.path.join(CERT_FOLDER, f'{cert_id}.png')
     if not os.path.exists(cert_path):
-        flash('Certificate image not available for download.', 'error')
-        return redirect(url_for('index'))
+        cert = db.get_certificate_by_id(cert_id)
+        if cert:
+            try:
+                generate_certificate_image(cert, cert_id)
+            except Exception as e:
+                app.logger.error(f'Dynamic image generation failed: {e}')
+                flash('Certificate image generation failed.', 'error')
+                return redirect(url_for('index'))
+        else:
+            flash('Certificate not found.', 'error')
+            return redirect(url_for('index'))
     return send_file(cert_path, as_attachment=True, download_name=f'Certificate_{cert_id}.png')
 
 
