@@ -4,7 +4,7 @@
 [![GitHub Repo](https://img.shields.io/badge/GitHub-Repository-blue?style=for-the-badge&logo=github)](https://github.com/ranjithbrs/CertValid)
 [![License](https://img.shields.io/badge/License-MIT-purple?style=for-the-badge)](LICENSE)
 
-A modern, enterprise-ready **Flask-based** Certificate Verification & Management System. Supports cryptographic SHA-256 file tamper detection, Certificate ID lookup, scannable QR code generation, dynamic PNG certificate downloading, and a full Admin Management Dashboard with audit trail logging.
+A modern, enterprise-ready **Flask-based** Certificate Verification & Management System. Supports cryptographic SHA-256 file tamper detection, Certificate ID lookup, scannable QR code generation, dynamic PNG certificate downloading, salted PBKDF2 password security, and a full Admin Management Dashboard with audit trail logging.
 
 ---
 
@@ -18,13 +18,15 @@ A modern, enterprise-ready **Flask-based** Certificate Verification & Management
 
 ## ✨ Features
 
-- 🔐 **Cryptographic SHA-256 Tamper Detection** — Uploaded certificate files (JPG/PNG/PDF) have their SHA-256 hash computed and compared against the secure registry. Any byte-level alteration instantly triggers a **TAMPERED / INVALID** alert.
+- 🔐 **Cryptographic SHA-256 Tamper Detection** — Uploaded certificate files (JPG/PNG/PDF) have their SHA-256 hash computed and compared against the indexed registry. Any byte-level alteration instantly triggers a **TAMPERED / INVALID** alert.
+- 🛡️ **Salted PBKDF2 Password Security** — Admin credentials are encrypted using `PBKDF2-HMAC-SHA256` (260,000 iterations + 16-byte random salt) with constant-time verification (`hmac.compare_digest`). Includes automatic transparent migration from legacy hashes.
 - 🔍 **Dual Verification Modes** — Verify certificates by **Drag-and-Drop File Upload** or **Certificate ID Search**.
-- 📱 **Embedded QR Code Verification** — Every issued certificate includes a unique QR code. Scanning it opens a live verification page in the browser.
-- 🎓 **Dynamic Certificate Image Generator** — Certificates are dynamically generated on-the-fly with custom typography, issue details, and embedded QR codes. High-resolution PNGs can be downloaded instantly.
+- 📱 **Embedded Live-Domain QR Codes** — Every issued certificate includes a QR code generated with the live production domain (`BASE_URL`). Scanning it opens a live verification page in the browser.
+- 🎓 **Dynamic Certificate Image Generator** — Certificates are generated on-the-fly with custom typography, issue details, and embedded QR codes. High-resolution PNGs are created dynamically if not present on disk.
+- ⚡ **Database Optimizations** — Indexed `file_hash` lookup ($O(1)$ complexity), SQLite WAL (Write-Ahead Logging) mode enabled, and single-connection aggregate SQL dashboard statistics.
 - 🚫 **Revoke & Reactivate Control** — Administrators can instantly revoke fraudulent or compromised certificates or reactivate them.
 - 📜 **Full Audit Logging** — Every verification request is logged with timestamp, computed hash, IP address, and verification status.
-- 🎨 **Modern Dark Glassmorphism UI** — Built with clean HTML5 & CSS3 featuring glassmorphism cards, micro-animations, responsive tables, and custom status badges.
+- 🎨 **Modern Dark Glassmorphism UI & Error Pages** — Built with clean HTML5 & CSS3 featuring glassmorphic cards, micro-animations, responsive tables, custom status badges, and styled 404/500 error handlers.
 
 ---
 
@@ -74,6 +76,16 @@ Open your browser to:
 
 ---
 
+## ⚙️ Environment Variables (Optional)
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `BASE_URL` | Base URL used in generated QR code verification links | `https://ranjithbrs.pythonanywhere.com` |
+| `SECRET_KEY` | Flask session secret key | Auto-generated random 32-byte hex token |
+| `FLASK_DEBUG` | Enable debug mode (`true` / `false`) | `false` |
+
+---
+
 ## 🌐 Deploying to PythonAnywhere
 
 1. **Clone repository on PythonAnywhere:**
@@ -107,8 +119,8 @@ Open your browser to:
 
 ```
 CertValid/
-├── app.py              # Flask app, routes, image generator & WSGI logic
-├── db.py               # SQLite database layer, schema & CRUD helpers
+├── app.py              # Flask app, routes, image generator & error handlers
+├── db.py               # SQLite database layer, indexing, PBKDF2 auth & CRUD
 ├── database.db         # SQLite database file (auto-initialized)
 ├── wsgi.py             # WSGI entry point for production deployment
 ├── requirements.txt    # Python package dependencies
@@ -121,7 +133,8 @@ CertValid/
 └── templates/
     ├── upload.html     # Public verification portal (upload & ID search)
     ├── result.html     # Verification report & cryptographic audit view
-    └── admin.html      # Admin dashboard, certificate issuer & audit logs
+    ├── admin.html      # Admin dashboard, certificate issuer & audit logs
+    └── error.html      # Styled 404 / 500 error pages
 ```
 
 ---
@@ -132,7 +145,7 @@ CertValid/
 graph TD
     A[User Uploads File / Enters ID] --> B{Verification Mode}
     B -- File Upload --> C[Compute SHA-256 Hash]
-    C --> D[Lookup Hash in Registry]
+    C --> D[Lookup Hash in Registry Index]
     B -- Certificate ID --> E[Lookup ID in Registry]
     D -- Hash Match --> F{Check Status}
     D -- No Hash Match --> G[Status: INVALID / TAMPERED]
@@ -150,10 +163,10 @@ graph TD
 ## 🛠️ Technology Stack
 
 - **Backend:** Python 3, Flask
-- **Database:** SQLite3
-- **Image Processing & QR:** Pillow (PIL), `qrcode`
+- **Database:** SQLite3 (WAL mode, indexed)
+- **Image Processing & QR:** Pillow (PIL), `qrcode`, NumPy
 - **Frontend:** HTML5, Modern Vanilla CSS (Glassmorphism design system)
-- **Security:** SHA-256 hashing, session authentication
+- **Security:** SHA-256 file hashing, PBKDF2-HMAC-SHA256 password security, constant-time comparison, 1-hr session timeout
 - **Hosting:** PythonAnywhere
 
 ---
