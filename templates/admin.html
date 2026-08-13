@@ -44,7 +44,6 @@
       {% endwith %}
 
       <form method="POST" action="{{ url_for('admin') }}">
-        <input type="hidden" name="action" value="login">
         <div class="form-group">
           <label class="form-label" for="username">Username</label>
           <input type="text" id="username" name="username" class="form-control" placeholder="admin" required autocomplete="username">
@@ -128,7 +127,7 @@
         <div class="stat-label">Authentic</div>
       </div>
       <div class="stat-card">
-        <div class="stat-value" style="background: linear-gradient(135deg,var(--red-light),var(--red)); -webkit-background-clip:text;">{{ stats.invalid_verifications }}</div>
+        <div class="stat-value" style="background: linear-gradient(135deg,var(--red-light),var(--red)); -webkit-background-clip:text;">{{ stats.failed_verifications }}</div>
         <div class="stat-label">Invalid / Failed</div>
       </div>
     </div>

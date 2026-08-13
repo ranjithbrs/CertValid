@@ -4,10 +4,9 @@ Handles public verification (file upload or cert ID), admin dashboard, certifica
 """
 
 import os
-import io
 import uuid
 import hashlib
-from datetime import datetime
+from datetime import datetime, timedelta
 from functools import wraps
 
 from flask import (
@@ -22,7 +21,15 @@ import db
 # ─── App Setup ───────────────────────────────────────────────────────────────
 
 app = Flask(__name__)
-app.secret_key = os.environ.get('SECRET_KEY', 'certvalid-dev-secret-change-in-production')
+
+_secret = os.environ.get('SECRET_KEY', '')
+if not _secret:
+    import secrets
+    _secret = secrets.token_hex(32)
+app.secret_key = _secret
+
+# Session expires after 1 hour of inactivity
+app.permanent_session_lifetime = timedelta(hours=1)
 
 UPLOAD_FOLDER = os.path.join(os.path.dirname(__file__), 'static', 'uploads')
 CERT_FOLDER   = os.path.join(os.path.dirname(__file__), 'static', 'certs')
@@ -31,6 +38,9 @@ os.makedirs(CERT_FOLDER,   exist_ok=True)
 
 ALLOWED_EXTENSIONS = {'jpg', 'jpeg', 'png', 'pdf'}
 MAX_FILE_SIZE_MB   = 10
+
+# Base URL for QR codes — reads from env var so live site uses the real domain
+BASE_URL = os.environ.get('BASE_URL', 'https://ranjithbrs.pythonanywhere.com').rstrip('/')
 
 
 # ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -54,25 +64,37 @@ def generate_certificate_image(cert_data: dict, cert_id: str) -> str:
     Returns the relative path (relative to static/) to the saved image.
     """
     W, H = 1100, 780
-    img = Image.new('RGB', (W, H), color=(15, 15, 35))
-    draw = ImageDraw.Draw(img)
 
-    # Background gradient effect using rectangles
-    for i in range(H):
-        ratio = i / H
-        r = int(15 + (30 - 15) * ratio)
-        g = int(15 + (20 - 15) * ratio)
-        b = int(35 + (60 - 35) * ratio)
-        draw.line([(0, i), (W, i)], fill=(r, g, b))
+    # Efficient gradient: build pixel array with numpy if available, else fast PIL paste
+    try:
+        import numpy as np
+        arr = np.zeros((H, W, 3), dtype=np.uint8)
+        for i in range(H):
+            ratio = i / H
+            arr[i, :] = [
+                int(15 + 15 * ratio),
+                int(15 +  5 * ratio),
+                int(35 + 25 * ratio),
+            ]
+        img = Image.fromarray(arr, 'RGB')
+    except ImportError:
+        # Fallback: two solid rectangles — imperceptibly different
+        img = Image.new('RGB', (W, H), color=(15, 15, 35))
+        top = Image.new('RGB', (W, H // 2), color=(15, 15, 35))
+        bot = Image.new('RGB', (W, H // 2), color=(30, 20, 60))
+        img.paste(top, (0, 0))
+        img.paste(bot, (0, H // 2))
+
+    draw = ImageDraw.Draw(img)
 
     # Gold border
     border = 18
     draw.rectangle([border, border, W - border, H - border],
                    outline=(212, 175, 55), width=3)
     draw.rectangle([border + 6, border + 6, W - border - 6, H - border - 6],
-                   outline=(212, 175, 55, 80), width=1)
+                   outline=(212, 175, 55), width=1)
 
-    # Try to use a system font; fall back to default
+    # Font helpers — try system fonts, fall back to PIL default
     def try_font(size):
         for name in ['arialbd.ttf', 'Arial Bold.ttf', 'DejaVuSans-Bold.ttf', 'Arial.ttf']:
             try:
@@ -94,7 +116,7 @@ def generate_certificate_image(cert_data: dict, cert_id: str) -> str:
     light = (180, 180, 210)
 
     # Header
-    draw.text((W // 2, 55),  'CERTIFICATE OF COMPLETION',
+    draw.text((W // 2, 55), 'CERTIFICATE OF COMPLETION',
               fill=gold, font=try_font(38), anchor='mm')
     draw.line([(100, 95), (W - 100, 95)], fill=gold, width=2)
 
@@ -111,22 +133,17 @@ def generate_certificate_image(cert_data: dict, cert_id: str) -> str:
 
     # Footer info
     y_base = 450
-    draw.text((200, y_base), 'Issued By', fill=light, font=try_font_regular(16), anchor='mm')
-    draw.text((200, y_base + 28), cert_data['issuer_name'],
-              fill=white, font=try_font(18), anchor='mm')
-
-    draw.text((W // 2, y_base), 'Issue Date', fill=light, font=try_font_regular(16), anchor='mm')
-    draw.text((W // 2, y_base + 28), cert_data['issue_date'],
-              fill=white, font=try_font(18), anchor='mm')
-
-    draw.text((870, y_base), 'Certificate ID', fill=light, font=try_font_regular(16), anchor='mm')
-    draw.text((870, y_base + 28), cert_id,
-              fill=white, font=try_font(14), anchor='mm')
+    draw.text((200, y_base),       'Issued By',           fill=light, font=try_font_regular(16), anchor='mm')
+    draw.text((200, y_base + 28),  cert_data['issuer_name'], fill=white, font=try_font(18), anchor='mm')
+    draw.text((W // 2, y_base),    'Issue Date',          fill=light, font=try_font_regular(16), anchor='mm')
+    draw.text((W // 2, y_base + 28), cert_data['issue_date'], fill=white, font=try_font(18), anchor='mm')
+    draw.text((870, y_base),       'Certificate ID',      fill=light, font=try_font_regular(16), anchor='mm')
+    draw.text((870, y_base + 28),  cert_id,               fill=white, font=try_font(14), anchor='mm')
 
     draw.line([(80, 530), (W - 80, 530)], fill=gold, width=1)
 
-    # QR Code (verify URL)
-    verify_url = f'http://127.0.0.1:5000/verify/{cert_id}'
+    # QR Code — uses live BASE_URL so scanning works from downloaded certificate
+    verify_url = f'{BASE_URL}/verify/{cert_id}'
     qr = qrcode.QRCode(version=1, box_size=6, border=2)
     qr.add_data(verify_url)
     qr.make(fit=True)
@@ -141,17 +158,33 @@ def generate_certificate_image(cert_data: dict, cert_id: str) -> str:
               'Scan to verify authenticity',
               fill=light, font=try_font_regular(14), anchor='mm')
 
-    # Hash fingerprint
+    # SHA-256 fingerprint
     short_hash = cert_data['file_hash'][:32] + '...'
     draw.text((W // 2, H - 30),
               f'SHA-256: {short_hash}',
               fill=(100, 100, 140), font=try_font_regular(11), anchor='mm')
 
     # Save
-    filename = f'{cert_id}.png'
+    filename  = f'{cert_id}.png'
     save_path = os.path.join(CERT_FOLDER, filename)
     img.save(save_path, 'PNG')
     return f'certs/{filename}'
+
+
+# ─── Error Handlers ──────────────────────────────────────────────────────────
+
+@app.errorhandler(404)
+def page_not_found(e):
+    return render_template('error.html', code=404,
+                           title='Page Not Found',
+                           message='The page you are looking for does not exist.'), 404
+
+
+@app.errorhandler(500)
+def internal_error(e):
+    return render_template('error.html', code=500,
+                           title='Server Error',
+                           message='Something went wrong on our end. Please try again.'), 500
 
 
 # ─── Public Routes ────────────────────────────────────────────────────────────
@@ -163,10 +196,11 @@ def index():
 
 @app.route('/verify', methods=['POST'])
 def verify():
-    ip = request.remote_addr
-    mode = request.form.get('mode', 'file')
+    ip      = request.remote_addr
+    mode    = request.form.get('mode', 'file')
+    now_str = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
 
-    # ── Mode: verify by Certificate ID ──
+    # ── Verify by Certificate ID ──
     if mode == 'id':
         cert_id = request.form.get('cert_id', '').strip().upper()
         if not cert_id:
@@ -177,33 +211,27 @@ def verify():
         if not cert:
             db.log_verification(cert_id, None, None, 'INVALID',
                                 'Certificate ID not found in registry.', ip)
-            return render_template('result.html',
-                                   status='INVALID',
+            return render_template('result.html', status='INVALID',
                                    reason='Certificate ID not found in the registry.',
-                                   cert=None, mode='id',
-                                   computed_hash=None,
-                                   verified_at=datetime.now().strftime('%Y-%m-%d %H:%M:%S'))
+                                   cert=None, mode='id', computed_hash=None,
+                                   verified_at=now_str)
 
         if cert['status'] == 'revoked':
             db.log_verification(cert_id, None, None, 'REVOKED',
                                 'Certificate has been revoked.', ip)
-            return render_template('result.html',
-                                   status='REVOKED',
+            return render_template('result.html', status='REVOKED',
                                    reason='This certificate has been officially revoked.',
-                                   cert=cert, mode='id',
-                                   computed_hash=None,
-                                   verified_at=datetime.now().strftime('%Y-%m-%d %H:%M:%S'))
+                                   cert=cert, mode='id', computed_hash=None,
+                                   verified_at=now_str)
 
         db.log_verification(cert_id, None, None, 'AUTHENTIC',
                             'Valid certificate ID found in registry.', ip)
-        return render_template('result.html',
-                               status='AUTHENTIC',
+        return render_template('result.html', status='AUTHENTIC',
                                reason='Certificate ID verified successfully.',
-                               cert=cert, mode='id',
-                               computed_hash=None,
-                               verified_at=datetime.now().strftime('%Y-%m-%d %H:%M:%S'))
+                               cert=cert, mode='id', computed_hash=None,
+                               verified_at=now_str)
 
-    # ── Mode: verify by file upload ──
+    # ── Verify by File Upload ──
     if 'certificate' not in request.files or request.files['certificate'].filename == '':
         flash('No file selected for upload.', 'error')
         return redirect(url_for('index'))
@@ -220,81 +248,69 @@ def verify():
         return redirect(url_for('index'))
 
     computed_hash = db.compute_file_hash(file_bytes)
-    cert = db.get_certificate_by_hash(computed_hash)
-    filename = file.filename
-    now_str = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    cert          = db.get_certificate_by_hash(computed_hash)
+    filename      = file.filename
 
     if not cert:
-        # Check if any cert exists with this hash (status=revoked)
         db.log_verification(None, filename, computed_hash, 'INVALID',
                             'No matching certificate found. File may be tampered or unregistered.', ip)
-        return render_template('result.html',
-                               status='INVALID',
-                               reason='No matching certificate found in the registry. The file may have been tampered with or was never issued.',
-                               cert=None, mode='file',
-                               computed_hash=computed_hash,
+        return render_template('result.html', status='INVALID',
+                               reason='No matching certificate found in the registry. '
+                                      'The file may have been tampered with or was never issued.',
+                               cert=None, mode='file', computed_hash=computed_hash,
                                verified_at=now_str)
 
     if cert['status'] == 'revoked':
         db.log_verification(cert['cert_id'], filename, computed_hash, 'REVOKED',
                             'Certificate has been revoked.', ip)
-        return render_template('result.html',
-                               status='REVOKED',
+        return render_template('result.html', status='REVOKED',
                                reason='This certificate has been officially revoked by the issuing authority.',
-                               cert=cert, mode='file',
-                               computed_hash=computed_hash,
+                               cert=cert, mode='file', computed_hash=computed_hash,
                                verified_at=now_str)
 
     db.log_verification(cert['cert_id'], filename, computed_hash, 'AUTHENTIC',
                         'File hash matches registry. No tampering detected.', ip)
-    return render_template('result.html',
-                           status='AUTHENTIC',
+    return render_template('result.html', status='AUTHENTIC',
                            reason='File hash matches the registry. No tampering detected.',
-                           cert=cert, mode='file',
-                           computed_hash=computed_hash,
+                           cert=cert, mode='file', computed_hash=computed_hash,
                            verified_at=now_str)
 
 
 @app.route('/verify/<cert_id>')
 def verify_by_id(cert_id):
     """QR code scan endpoint — direct link verification."""
-    ip = request.remote_addr
+    ip      = request.remote_addr
     cert_id = cert_id.strip().upper()
-    cert = db.get_certificate_by_id(cert_id)
+    cert    = db.get_certificate_by_id(cert_id)
     now_str = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
 
     if not cert:
         db.log_verification(cert_id, None, None, 'INVALID', 'QR scan: ID not found.', ip)
-        return render_template('result.html',
-                               status='INVALID',
+        return render_template('result.html', status='INVALID',
                                reason='Certificate ID not found in the registry.',
-                               cert=None, mode='id',
-                               computed_hash=None,
+                               cert=None, mode='id', computed_hash=None,
                                verified_at=now_str)
 
     if cert['status'] == 'revoked':
         db.log_verification(cert_id, None, None, 'REVOKED', 'QR scan: certificate revoked.', ip)
-        return render_template('result.html',
-                               status='REVOKED',
+        return render_template('result.html', status='REVOKED',
                                reason='This certificate has been officially revoked.',
-                               cert=cert, mode='id',
-                               computed_hash=None,
+                               cert=cert, mode='id', computed_hash=None,
                                verified_at=now_str)
 
     db.log_verification(cert_id, None, None, 'AUTHENTIC', 'QR scan: certificate verified.', ip)
-    return render_template('result.html',
-                           status='AUTHENTIC',
+    return render_template('result.html', status='AUTHENTIC',
                            reason='Certificate verified via QR code.',
-                           cert=cert, mode='id',
-                           computed_hash=None,
+                           cert=cert, mode='id', computed_hash=None,
                            verified_at=now_str)
 
 
 @app.route('/download/<cert_id>')
 def download_cert(cert_id):
-    """Download the generated certificate PNG image."""
-    cert_id = cert_id.strip().upper()
+    """Download the generated certificate PNG image, generating it on-the-fly if needed."""
+    cert_id   = cert_id.strip().upper()
     cert_path = os.path.join(CERT_FOLDER, f'{cert_id}.png')
+
     if not os.path.exists(cert_path):
         cert = db.get_certificate_by_id(cert_id)
         if cert:
@@ -307,7 +323,9 @@ def download_cert(cert_id):
         else:
             flash('Certificate not found.', 'error')
             return redirect(url_for('index'))
-    return send_file(cert_path, as_attachment=True, download_name=f'Certificate_{cert_id}.png')
+
+    return send_file(cert_path, as_attachment=True,
+                     download_name=f'Certificate_{cert_id}.png')
 
 
 # ─── Admin Routes ─────────────────────────────────────────────────────────────
@@ -315,18 +333,15 @@ def download_cert(cert_id):
 @app.route('/admin', methods=['GET', 'POST'])
 def admin():
     if request.method == 'POST':
-        action = request.form.get('action')
-
-        if action == 'login':
-            username = request.form.get('username', '')
-            password = request.form.get('password', '')
-            if db.verify_admin(username, password):
-                session['admin_logged_in'] = True
-                session['admin_user'] = username
-                return redirect(url_for('admin_dashboard'))
-            else:
-                flash('Invalid username or password.', 'error')
-                return render_template('admin.html', logged_in=False)
+        username = request.form.get('username', '')
+        password = request.form.get('password', '')
+        if db.verify_admin(username, password):
+            session.permanent = True          # enforce 1-hour lifetime
+            session['admin_logged_in'] = True
+            session['admin_user'] = username
+            return redirect(url_for('admin_dashboard'))
+        flash('Invalid username or password.', 'error')
+        return render_template('admin.html', logged_in=False)
 
     if session.get('admin_logged_in'):
         return redirect(url_for('admin_dashboard'))
@@ -349,19 +364,17 @@ def admin_dashboard():
 @login_required
 def admin_issue():
     student_name = request.form.get('student_name', '').strip()
-    course_name  = request.form.get('course_name', '').strip()
-    issue_date   = request.form.get('issue_date', '').strip()
-    issuer_name  = request.form.get('issuer_name', '').strip()
+    course_name  = request.form.get('course_name',  '').strip()
+    issue_date   = request.form.get('issue_date',   '').strip()
+    issuer_name  = request.form.get('issuer_name',  '').strip()
 
     if not all([student_name, course_name, issue_date, issuer_name]):
         flash('All fields are required to issue a certificate.', 'error')
         return redirect(url_for('admin_dashboard'))
 
-    # Generate a stable unique file_hash for this certificate record
     unique_seed = f'{student_name}|{course_name}|{issue_date}|{issuer_name}|{uuid.uuid4()}'
-    file_hash = hashlib.sha256(unique_seed.encode()).hexdigest()
-
-    cert_id = db.add_certificate(student_name, course_name, issue_date, issuer_name, file_hash)
+    file_hash   = hashlib.sha256(unique_seed.encode()).hexdigest()
+    cert_id     = db.add_certificate(student_name, course_name, issue_date, issuer_name, file_hash)
 
     cert_data = {
         'student_name': student_name,
@@ -407,4 +420,5 @@ def admin_logout():
 
 if __name__ == '__main__':
     db.init_db()
-    app.run(debug=True)
+    debug_mode = os.environ.get('FLASK_DEBUG', 'false').lower() == 'true'
+    app.run(debug=debug_mode)
