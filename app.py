@@ -1,6 +1,7 @@
 """
 app.py - Flask application for the Certificate Verification & Management System.
 Handles public verification (file upload or cert ID), admin dashboard, certificate issuance.
+Includes rate limiting, anti-spam protection, and security headers.
 """
 
 import os
@@ -13,6 +14,8 @@ from flask import (
     Flask, render_template, request, redirect,
     url_for, session, send_file, flash
 )
+from flask_limiter import Limiter
+from flask_limiter.util import get_remote_address
 from PIL import Image, ImageDraw, ImageFont
 import qrcode
 
@@ -31,6 +34,14 @@ app.secret_key = _secret
 # Session expires after 1 hour of inactivity
 app.permanent_session_lifetime = timedelta(hours=1)
 
+# Rate Limiter setup
+limiter = Limiter(
+    get_remote_address,
+    app=app,
+    default_limits=["200 per day", "50 per hour"],
+    storage_uri="memory://"
+)
+
 UPLOAD_FOLDER = os.path.join(os.path.dirname(__file__), 'static', 'uploads')
 CERT_FOLDER   = os.path.join(os.path.dirname(__file__), 'static', 'certs')
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
@@ -41,6 +52,17 @@ MAX_FILE_SIZE_MB   = 10
 
 # Base URL for QR codes — reads from env var so live site uses the real domain
 BASE_URL = os.environ.get('BASE_URL', 'https://ranjithbrs.pythonanywhere.com').rstrip('/')
+
+
+# ─── Security Response Headers Middleware ────────────────────────────────────
+
+@app.after_request
+def add_security_headers(response):
+    response.headers['X-Content-Type-Options'] = 'nosniff'
+    response.headers['X-Frame-Options'] = 'SAMEORIGIN'
+    response.headers['X-XSS-Protection'] = '1; mode=block'
+    response.headers['Referrer-Policy'] = 'strict-origin-when-cross-origin'
+    return response
 
 
 # ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -65,7 +87,6 @@ def generate_certificate_image(cert_data: dict, cert_id: str) -> str:
     """
     W, H = 1100, 780
 
-    # Efficient gradient: build pixel array with numpy if available, else fast PIL paste
     try:
         import numpy as np
         arr = np.zeros((H, W, 3), dtype=np.uint8)
@@ -78,7 +99,6 @@ def generate_certificate_image(cert_data: dict, cert_id: str) -> str:
             ]
         img = Image.fromarray(arr, 'RGB')
     except ImportError:
-        # Fallback: two solid rectangles — imperceptibly different
         img = Image.new('RGB', (W, H), color=(15, 15, 35))
         top = Image.new('RGB', (W, H // 2), color=(15, 15, 35))
         bot = Image.new('RGB', (W, H // 2), color=(30, 20, 60))
@@ -87,14 +107,12 @@ def generate_certificate_image(cert_data: dict, cert_id: str) -> str:
 
     draw = ImageDraw.Draw(img)
 
-    # Gold border
     border = 18
     draw.rectangle([border, border, W - border, H - border],
                    outline=(212, 175, 55), width=3)
     draw.rectangle([border + 6, border + 6, W - border - 6, H - border - 6],
                    outline=(212, 175, 55), width=1)
 
-    # Font helpers — try system fonts, fall back to PIL default
     def try_font(size):
         for name in ['arialbd.ttf', 'Arial Bold.ttf', 'DejaVuSans-Bold.ttf', 'Arial.ttf']:
             try:
@@ -115,12 +133,10 @@ def generate_certificate_image(cert_data: dict, cert_id: str) -> str:
     white = (255, 255, 255)
     light = (180, 180, 210)
 
-    # Header
     draw.text((W // 2, 55), 'CERTIFICATE OF COMPLETION',
               fill=gold, font=try_font(38), anchor='mm')
     draw.line([(100, 95), (W - 100, 95)], fill=gold, width=2)
 
-    # Body
     draw.text((W // 2, 145), 'This is to certify that',
               fill=light, font=try_font_regular(20), anchor='mm')
     draw.text((W // 2, 210), cert_data['student_name'],
@@ -131,7 +147,6 @@ def generate_certificate_image(cert_data: dict, cert_id: str) -> str:
     draw.text((W // 2, 355), cert_data['course_name'],
               fill=gold, font=try_font(34), anchor='mm')
 
-    # Footer info
     y_base = 450
     draw.text((200, y_base),       'Issued By',           fill=light, font=try_font_regular(16), anchor='mm')
     draw.text((200, y_base + 28),  cert_data['issuer_name'], fill=white, font=try_font(18), anchor='mm')
@@ -142,7 +157,6 @@ def generate_certificate_image(cert_data: dict, cert_id: str) -> str:
 
     draw.line([(80, 530), (W - 80, 530)], fill=gold, width=1)
 
-    # QR Code — uses live BASE_URL so scanning works from downloaded certificate
     verify_url = f'{BASE_URL}/verify/{cert_id}'
     qr = qrcode.QRCode(version=1, box_size=6, border=2)
     qr.add_data(verify_url)
@@ -158,13 +172,11 @@ def generate_certificate_image(cert_data: dict, cert_id: str) -> str:
               'Scan to verify authenticity',
               fill=light, font=try_font_regular(14), anchor='mm')
 
-    # SHA-256 fingerprint
     short_hash = cert_data['file_hash'][:32] + '...'
     draw.text((W // 2, H - 30),
               f'SHA-256: {short_hash}',
               fill=(100, 100, 140), font=try_font_regular(11), anchor='mm')
 
-    # Save
     filename  = f'{cert_id}.png'
     save_path = os.path.join(CERT_FOLDER, filename)
     img.save(save_path, 'PNG')
@@ -187,6 +199,13 @@ def internal_error(e):
                            message='Something went wrong on our end. Please try again.'), 500
 
 
+@app.errorhandler(429)
+def rate_limit_exceeded(e):
+    return render_template('error.html', code=429,
+                           title='Rate Limit Exceeded',
+                           message='Too many requests from your IP. Please slow down and try again in a few minutes.'), 429
+
+
 # ─── Public Routes ────────────────────────────────────────────────────────────
 
 @app.route('/')
@@ -195,6 +214,7 @@ def index():
 
 
 @app.route('/verify', methods=['POST'])
+@limiter.limit("10 per minute")
 def verify():
     ip      = request.remote_addr
     mode    = request.form.get('mode', 'file')
@@ -331,6 +351,7 @@ def download_cert(cert_id):
 # ─── Admin Routes ─────────────────────────────────────────────────────────────
 
 @app.route('/admin', methods=['GET', 'POST'])
+@limiter.limit("5 per 5 minutes", methods=["POST"])
 def admin():
     if request.method == 'POST':
         username = request.form.get('username', '')
