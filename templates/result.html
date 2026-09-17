@@ -43,6 +43,9 @@
           {% elif match_type == 'ocr' %}
             <span class="badge badge-authentic">📄 OCR Text Extracted Match</span>
           {% endif %}
+          {% if signature_valid %}
+            <span class="badge badge-authentic">🔏 Ed25519 Digital Signature Verified</span>
+          {% endif %}
         </div>
       </div>
     {% elif status_upper == 'REVOKED' %}
@@ -120,7 +123,7 @@
     <!-- Cryptographic & Perceptual Audit -->
     <div class="card fade-in-up" style="animation-delay:.2s; margin-bottom:1.5rem;">
       <div class="section-header">
-        <span class="section-title">🔐 Cryptographic & Perceptual Audit</span>
+        <span class="section-title">🔐 Cryptographic & Digital Signature Audit</span>
       </div>
 
       {% if computed_hash %}
@@ -142,20 +145,44 @@
           <div class="form-label">Registry SHA-256 Hash</div>
           <div class="hash-block">{{ cert.file_hash }}</div>
         </div>
+      {% endif %}
 
-        {% if match_type == 'exact' %}
-          <div style="margin-top:.5rem; padding:.75rem 1rem; border-radius:8px; font-size:.9rem; font-weight:600; background: rgba(16,185,129,0.10); color: var(--emerald-light); border: 1px solid rgba(16,185,129,0.25);">
-            ✅ SHA-256 Exact Byte Match — file is byte-perfect and unmodified.
-          </div>
-        {% elif match_type == 'visual' %}
-          <div style="margin-top:.5rem; padding:.75rem 1rem; border-radius:8px; font-size:.9rem; font-weight:600; background: rgba(16,185,129,0.10); color: var(--emerald-light); border: 1px solid rgba(16,185,129,0.25);">
-            👁️ Perceptual Hash Match ({{ visual_similarity }}% Visual Similarity) — image is visually authentic (re-saved, compressed, or resized file).
-          </div>
-        {% elif computed_hash %}
-          <div style="margin-top:.5rem; padding:.75rem 1rem; border-radius:8px; font-size:.9rem; font-weight:600; background: rgba(239,68,68,0.10); color: var(--red-light); border: 1px solid rgba(239,68,68,0.25);">
-            ⚠️ Hash Mismatch — file content differs significantly from registered copy.
-          </div>
-        {% endif %}
+      {% if cert and cert.signature %}
+        <div class="form-group">
+          <div class="form-label">Ed25519 Asymmetric Digital Signature (Base64)</div>
+          <div class="hash-block" style="color:var(--indigo-light);">{{ cert.signature }}</div>
+        </div>
+      {% endif %}
+
+      {% if public_key_b64 %}
+        <div class="form-group">
+          <div class="form-label">Issuer Ed25519 Public Key</div>
+          <div class="hash-block" style="color:var(--text-dim);">{{ public_key_b64 }}</div>
+        </div>
+      {% endif %}
+
+      {% if match_type == 'exact' %}
+        <div style="margin-top:.5rem; padding:.75rem 1rem; border-radius:8px; font-size:.9rem; font-weight:600; background: rgba(16,185,129,0.10); color: var(--emerald-light); border: 1px solid rgba(16,185,129,0.25);">
+          ✅ SHA-256 Exact Byte Match — file is byte-perfect and unmodified.
+        </div>
+      {% elif match_type == 'visual' %}
+        <div style="margin-top:.5rem; padding:.75rem 1rem; border-radius:8px; font-size:.9rem; font-weight:600; background: rgba(16,185,129,0.10); color: var(--emerald-light); border: 1px solid rgba(16,185,129,0.25);">
+          👁️ Perceptual Hash Match ({{ visual_similarity }}% Visual Similarity) — image is visually authentic (re-saved, compressed, or resized file).
+        </div>
+      {% elif match_type == 'ocr' %}
+        <div style="margin-top:.5rem; padding:.75rem 1rem; border-radius:8px; font-size:.9rem; font-weight:600; background: rgba(16,185,129,0.10); color: var(--emerald-light); border: 1px solid rgba(16,185,129,0.25);">
+          📄 OCR Text Extraction Match — Certificate ID ({{ ocr_cert_id }}) successfully parsed from document page text.
+        </div>
+      {% elif computed_hash %}
+        <div style="margin-top:.5rem; padding:.75rem 1rem; border-radius:8px; font-size:.9rem; font-weight:600; background: rgba(239,68,68,0.10); color: var(--red-light); border: 1px solid rgba(239,68,68,0.25);">
+          ⚠️ Hash Mismatch — file content differs significantly from registered copy.
+        </div>
+      {% endif %}
+
+      {% if signature_valid %}
+        <div style="margin-top:.5rem; padding:.75rem 1rem; border-radius:8px; font-size:.9rem; font-weight:600; background: rgba(99,102,241,0.12); color: var(--indigo-light); border: 1px solid rgba(99,102,241,0.3);">
+          🔏 Ed25519 Asymmetric Signature Verified — mathematically authentic signature issued by authorized key.
+        </div>
       {% endif %}
 
       {% if not computed_hash and not (cert and cert.file_hash) %}
@@ -179,7 +206,9 @@
           <div class="info-card-label">Verification Method</div>
           <div class="info-card-value">
             {% if mode == 'file' %}
-              {% if match_type == 'exact' %}📄 SHA-256 Byte Hash{% else %}👁️ Perceptual Visual Hash{% endif %}
+              {% if match_type == 'exact' %}📄 SHA-256 Byte Hash
+              {% elif match_type == 'visual' %}👁️ Perceptual Visual Hash
+              {% else %}📄 OCR Text Parsing{% endif %}
             {% else %}
               🔍 Certificate ID
             {% endif %}

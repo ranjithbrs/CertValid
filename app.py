@@ -1,7 +1,7 @@
 """
 app.py - Flask application for the Certificate Verification & Management System.
 Handles public verification (file upload or cert ID), admin dashboard, certificate issuance.
-Includes rate limiting, anti-spam protection, security headers, pHash, and OCR text extraction.
+Includes rate limiting, anti-spam, security headers, pHash, OCR text extraction, and Ed25519 digital signatures.
 """
 
 import os
@@ -184,7 +184,6 @@ def generate_certificate_image(cert_data: dict, cert_id: str) -> str:
     save_path = os.path.join(CERT_FOLDER, filename)
     img.save(save_path, 'PNG')
 
-    # Compute pHash of generated image and update database record
     try:
         phash_str = str(imagehash.phash(img))
         db.update_certificate_phash(cert_id, phash_str)
@@ -230,6 +229,7 @@ def verify():
     ip      = request.remote_addr
     mode    = request.form.get('mode', 'file')
     now_str = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    pub_key_b64 = db.get_public_key_b64()
 
     # ── Verify by Certificate ID ──
     if mode == 'id':
@@ -246,7 +246,13 @@ def verify():
                                    reason='Certificate ID not found in the registry.',
                                    cert=None, mode='id', computed_hash=None,
                                    computed_phash=None, match_type=None, visual_similarity=0.0,
-                                   ocr_cert_id=None, verified_at=now_str)
+                                   ocr_cert_id=None, signature_valid=False, public_key_b64=pub_key_b64,
+                                   verified_at=now_str)
+
+        sig_valid = False
+        if cert and cert.get('signature'):
+            payload = db.build_cert_payload(cert['cert_id'], cert['student_name'], cert['course_name'], cert['issue_date'], cert['file_hash'])
+            sig_valid = db.verify_payload_signature(payload, cert['signature'])
 
         if cert['status'] == 'revoked':
             db.log_verification(cert_id, None, None, 'REVOKED',
@@ -255,7 +261,8 @@ def verify():
                                    reason='This certificate has been officially revoked.',
                                    cert=cert, mode='id', computed_hash=None,
                                    computed_phash=None, match_type=None, visual_similarity=0.0,
-                                   ocr_cert_id=None, verified_at=now_str)
+                                   ocr_cert_id=None, signature_valid=sig_valid, public_key_b64=pub_key_b64,
+                                   verified_at=now_str)
 
         db.log_verification(cert_id, None, None, 'AUTHENTIC',
                             'Valid certificate ID found in registry.', ip)
@@ -263,7 +270,8 @@ def verify():
                                reason='Certificate ID verified successfully.',
                                cert=cert, mode='id', computed_hash=None,
                                computed_phash=None, match_type='exact', visual_similarity=100.0,
-                               ocr_cert_id=None, verified_at=now_str)
+                               ocr_cert_id=None, signature_valid=sig_valid, public_key_b64=pub_key_b64,
+                               verified_at=now_str)
 
     # ── Verify by File Upload ──
     if 'certificate' not in request.files or request.files['certificate'].filename == '':
@@ -310,6 +318,11 @@ def verify():
                 match_type = 'ocr'
                 similarity = 100.0
 
+    sig_valid = False
+    if cert and cert.get('signature'):
+        payload = db.build_cert_payload(cert['cert_id'], cert['student_name'], cert['course_name'], cert['issue_date'], cert['file_hash'])
+        sig_valid = db.verify_payload_signature(payload, cert['signature'])
+
     if not cert:
         db.log_verification(None, filename, computed_hash, 'INVALID',
                             'No matching certificate found by SHA-256, visual pHash, or OCR text.', ip)
@@ -318,7 +331,8 @@ def verify():
                                       'The file may have been altered significantly or was never issued.',
                                cert=None, mode='file', computed_hash=computed_hash,
                                computed_phash=computed_phash, match_type=None, visual_similarity=0.0,
-                               ocr_cert_id=None, verified_at=now_str)
+                               ocr_cert_id=None, signature_valid=False, public_key_b64=pub_key_b64,
+                               verified_at=now_str)
 
     if cert['status'] == 'revoked':
         db.log_verification(cert['cert_id'], filename, computed_hash, 'REVOKED',
@@ -328,6 +342,7 @@ def verify():
                                cert=cert, mode='file', computed_hash=computed_hash,
                                computed_phash=computed_phash, match_type=match_type,
                                visual_similarity=similarity, ocr_cert_id=ocr_cert_id,
+                               signature_valid=sig_valid, public_key_b64=pub_key_b64,
                                verified_at=now_str)
 
     if match_type == 'exact':
@@ -342,7 +357,8 @@ def verify():
                            reason=reason, cert=cert, mode='file',
                            computed_hash=computed_hash, computed_phash=computed_phash,
                            match_type=match_type, visual_similarity=similarity,
-                           ocr_cert_id=ocr_cert_id, verified_at=now_str)
+                           ocr_cert_id=ocr_cert_id, signature_valid=sig_valid,
+                           public_key_b64=pub_key_b64, verified_at=now_str)
 
 
 @app.route('/verify/<cert_id>')
@@ -352,6 +368,12 @@ def verify_by_id(cert_id):
     cert_id = cert_id.strip().upper()
     cert    = db.get_certificate_by_id(cert_id)
     now_str = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    pub_key_b64 = db.get_public_key_b64()
+
+    sig_valid = False
+    if cert and cert.get('signature'):
+        payload = db.build_cert_payload(cert['cert_id'], cert['student_name'], cert['course_name'], cert['issue_date'], cert['file_hash'])
+        sig_valid = db.verify_payload_signature(payload, cert['signature'])
 
     if not cert:
         db.log_verification(cert_id, None, None, 'INVALID', 'QR scan: ID not found.', ip)
@@ -359,7 +381,8 @@ def verify_by_id(cert_id):
                                reason='Certificate ID not found in the registry.',
                                cert=None, mode='id', computed_hash=None,
                                computed_phash=None, match_type=None, visual_similarity=0.0,
-                               ocr_cert_id=None, verified_at=now_str)
+                               ocr_cert_id=None, signature_valid=False, public_key_b64=pub_key_b64,
+                               verified_at=now_str)
 
     if cert['status'] == 'revoked':
         db.log_verification(cert_id, None, None, 'REVOKED', 'QR scan: certificate revoked.', ip)
@@ -367,14 +390,16 @@ def verify_by_id(cert_id):
                                reason='This certificate has been officially revoked.',
                                cert=cert, mode='id', computed_hash=None,
                                computed_phash=None, match_type=None, visual_similarity=0.0,
-                               ocr_cert_id=None, verified_at=now_str)
+                               ocr_cert_id=None, signature_valid=sig_valid, public_key_b64=pub_key_b64,
+                               verified_at=now_str)
 
     db.log_verification(cert_id, None, None, 'AUTHENTIC', 'QR scan: certificate verified.', ip)
     return render_template('result.html', status='AUTHENTIC',
                            reason='Certificate verified via QR code.',
                            cert=cert, mode='id', computed_hash=None,
                            computed_phash=None, match_type='exact', visual_similarity=100.0,
-                           ocr_cert_id=None, verified_at=now_str)
+                           ocr_cert_id=None, signature_valid=sig_valid, public_key_b64=pub_key_b64,
+                           verified_at=now_str)
 
 
 @app.route('/download/<cert_id>')
@@ -461,7 +486,7 @@ def admin_issue():
     except Exception as e:
         app.logger.error(f'Certificate image generation failed: {e}')
 
-    flash(f'Certificate issued successfully! ID: {cert_id}', 'success')
+    flash(f'Certificate issued successfully with Ed25519 digital signature! ID: {cert_id}', 'success')
     return redirect(url_for('admin_dashboard') + '?tab=registry')
 
 

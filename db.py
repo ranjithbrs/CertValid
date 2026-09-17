@@ -1,7 +1,7 @@
 """
 db.py - Database initialization and helper functions for the Certificate Verification System.
 Uses SQLite for persistence. All certificate data and verification logs are stored here.
-Includes cryptographic SHA-256, perceptual image hashing (pHash), and OCR/PDF text extraction.
+Includes SHA-256, pHash, OCR text extraction, and Ed25519 Asymmetric Cryptographic Digital Signatures.
 """
 
 import sqlite3
@@ -11,13 +11,22 @@ import uuid
 import os
 import io
 import re
+import base64
 from datetime import datetime
 from PIL import Image
 import imagehash
 import pypdf
 import pytesseract
+from cryptography.hazmat.primitives.asymmetric import ed25519
+from cryptography.hazmat.primitives import serialization
 
 DB_PATH = os.path.join(os.path.dirname(__file__), 'database.db')
+KEYS_DIR = os.path.join(os.path.dirname(__file__), 'instance', 'keys')
+PRIV_KEY_PATH = os.path.join(KEYS_DIR, 'ed25519_private.pem')
+PUB_KEY_PATH = os.path.join(KEYS_DIR, 'ed25519_public.pem')
+
+_private_key = None
+_public_key = None
 
 
 # ─── Connection ───────────────────────────────────────────────────────────────
@@ -29,6 +38,77 @@ def get_db():
     conn.execute('PRAGMA journal_mode=WAL')
     conn.execute('PRAGMA foreign_keys=ON')
     return conn
+
+
+# ─── Ed25519 Asymmetric Cryptography Keys & Digital Signatures ─────────────
+
+def init_keys():
+    """Initialize or load the Ed25519 asymmetric private & public key pair."""
+    global _private_key, _public_key
+    if _private_key and _public_key:
+        return
+
+    os.makedirs(KEYS_DIR, exist_ok=True)
+    if os.path.exists(PRIV_KEY_PATH) and os.path.exists(PUB_KEY_PATH):
+        try:
+            with open(PRIV_KEY_PATH, 'rb') as f:
+                _private_key = serialization.load_pem_private_key(f.read(), password=None)
+            with open(PUB_KEY_PATH, 'rb') as f:
+                _public_key = serialization.load_pem_public_key(f.read())
+            return
+        except Exception:
+            pass
+
+    # Generate new Ed25519 keypair
+    _private_key = ed25519.Ed25519PrivateKey.generate()
+    _public_key = _private_key.public_key()
+
+    with open(PRIV_KEY_PATH, 'wb') as f:
+        f.write(_private_key.private_bytes(
+            encoding=serialization.Encoding.PEM,
+            format=serialization.PrivateFormat.PKCS8,
+            encryption_algorithm=serialization.NoEncryption()
+        ))
+    with open(PUB_KEY_PATH, 'wb') as f:
+        f.write(_public_key.public_bytes(
+            encoding=serialization.Encoding.PEM,
+            format=serialization.PublicFormat.SubjectPublicKeyInfo
+        ))
+
+
+def get_public_key_b64() -> str:
+    """Return the raw Ed25519 public key in Base64 encoding."""
+    init_keys()
+    pub_bytes = _public_key.public_bytes(
+        encoding=serialization.Encoding.Raw,
+        format=serialization.PublicFormat.Raw
+    )
+    return base64.b64encode(pub_bytes).decode('utf-8')
+
+
+def build_cert_payload(cert_id: str, student_name: str, course_name: str, issue_date: str, file_hash: str) -> str:
+    """Construct canonical string payload for digital signature verification."""
+    return f"{cert_id}|{student_name}|{course_name}|{issue_date}|{file_hash}"
+
+
+def sign_payload(payload_str: str) -> str:
+    """Sign payload string using Ed25519 private key. Returns Base64 signature."""
+    init_keys()
+    sig_bytes = _private_key.sign(payload_str.encode('utf-8'))
+    return base64.b64encode(sig_bytes).decode('utf-8')
+
+
+def verify_payload_signature(payload_str: str, signature_b64: str) -> bool:
+    """Verify an Ed25519 Base64 signature against payload string using public key."""
+    if not payload_str or not signature_b64:
+        return False
+    init_keys()
+    try:
+        sig_bytes = base64.b64decode(signature_b64)
+        _public_key.verify(sig_bytes, payload_str.encode('utf-8'))
+        return True
+    except Exception:
+        return False
 
 
 # ─── Password Hashing (PBKDF2 + salt) ────────────────────────────────────────
@@ -59,7 +139,8 @@ def _is_legacy_sha256(stored_hash: str) -> bool:
 # ─── Schema Init & Migration ──────────────────────────────────────────────────
 
 def init_db():
-    """Initialize database tables, indexes, schema migrations, and seed sample data."""
+    """Initialize database tables, indexes, schema migrations, keys, and seed sample data."""
+    init_keys()
     conn = get_db()
     c = conn.cursor()
 
@@ -74,15 +155,18 @@ def init_db():
             issuer_name TEXT NOT NULL,
             file_hash TEXT NOT NULL,
             phash TEXT,
+            signature TEXT,
             status TEXT NOT NULL DEFAULT 'active',
             created_at TEXT NOT NULL
         )
     ''')
 
-    # Migration check: ensure phash column exists if table was created earlier
+    # Migration checks: ensure phash and signature columns exist
     columns = [r['name'] for r in c.execute("PRAGMA table_info(certificates)").fetchall()]
     if 'phash' not in columns:
         c.execute("ALTER TABLE certificates ADD COLUMN phash TEXT")
+    if 'signature' not in columns:
+        c.execute("ALTER TABLE certificates ADD COLUMN signature TEXT")
 
     # Index on file_hash for O(1) exact lookups
     c.execute('''
@@ -160,13 +244,15 @@ def init_db():
             'SELECT id FROM certificates WHERE cert_id = ?', (s['cert_id'],)
         ).fetchone()
         if not existing:
+            payload = build_cert_payload(s['cert_id'], s['student_name'], s['course_name'], s['issue_date'], s['file_hash'])
+            sig = sign_payload(payload)
             c.execute('''
                 INSERT INTO certificates
-                (cert_id, student_name, course_name, issue_date, issuer_name, file_hash, status, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                (cert_id, student_name, course_name, issue_date, issuer_name, file_hash, signature, status, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             ''', (s['cert_id'], s['student_name'], s['course_name'],
                   s['issue_date'], s['issuer_name'], s['file_hash'],
-                  s['status'], now))
+                  sig, s['status'], now))
 
     conn.commit()
     conn.close()
@@ -211,7 +297,6 @@ def extract_text_from_file(file_bytes: bytes, filename: str = '') -> str:
     extracted_text = ""
     ext = filename.rsplit('.', 1)[-1].lower() if '.' in filename else ''
 
-    # 1. Native PDF text extraction
     if ext == 'pdf' or file_bytes.startswith(b'%PDF'):
         try:
             reader = pypdf.PdfReader(io.BytesIO(file_bytes))
@@ -222,7 +307,6 @@ def extract_text_from_file(file_bytes: bytes, filename: str = '') -> str:
         except Exception:
             pass
 
-    # 2. OCR Image text extraction via pytesseract
     if not extracted_text:
         try:
             img = Image.open(io.BytesIO(file_bytes))
@@ -248,15 +332,18 @@ def extract_cert_id_from_text(text: str) -> str:
 # ─── Certificate CRUD ────────────────────────────────────────────────────────
 
 def add_certificate(student_name, course_name, issue_date, issuer_name, file_hash, phash=None):
-    """Insert a new certificate record. Returns the generated cert_id."""
+    """Insert a new certificate record with Ed25519 digital signature. Returns the generated cert_id."""
     cert_id = generate_cert_id()
+    payload = build_cert_payload(cert_id, student_name, course_name, issue_date, file_hash)
+    signature = sign_payload(payload)
+
     now = datetime.now().isoformat(sep=' ', timespec='seconds')
     conn = get_db()
     conn.execute('''
         INSERT INTO certificates
-        (cert_id, student_name, course_name, issue_date, issuer_name, file_hash, phash, status, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, 'active', ?)
-    ''', (cert_id, student_name, course_name, issue_date, issuer_name, file_hash, phash, now))
+        (cert_id, student_name, course_name, issue_date, issuer_name, file_hash, phash, signature, status, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'active', ?)
+    ''', (cert_id, student_name, course_name, issue_date, issuer_name, file_hash, phash, signature, now))
     conn.commit()
     conn.close()
     return cert_id
