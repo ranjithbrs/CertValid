@@ -40,6 +40,8 @@
             <span class="badge badge-authentic">100% Exact Byte Match</span>
           {% elif match_type == 'visual' %}
             <span class="badge badge-authentic">👁️ {{ visual_similarity }}% Visual Match</span>
+          {% elif match_type == 'ocr' %}
+            <span class="badge badge-authentic">📄 OCR Text Extracted Match</span>
           {% endif %}
         </div>
       </div>

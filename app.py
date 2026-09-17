@@ -1,7 +1,7 @@
 """
 app.py - Flask application for the Certificate Verification & Management System.
 Handles public verification (file upload or cert ID), admin dashboard, certificate issuance.
-Includes rate limiting, anti-spam protection, security headers, and Perceptual Image Hashing (pHash).
+Includes rate limiting, anti-spam protection, security headers, pHash, and OCR text extraction.
 """
 
 import os
@@ -246,7 +246,7 @@ def verify():
                                    reason='Certificate ID not found in the registry.',
                                    cert=None, mode='id', computed_hash=None,
                                    computed_phash=None, match_type=None, visual_similarity=0.0,
-                                   verified_at=now_str)
+                                   ocr_cert_id=None, verified_at=now_str)
 
         if cert['status'] == 'revoked':
             db.log_verification(cert_id, None, None, 'REVOKED',
@@ -255,7 +255,7 @@ def verify():
                                    reason='This certificate has been officially revoked.',
                                    cert=cert, mode='id', computed_hash=None,
                                    computed_phash=None, match_type=None, visual_similarity=0.0,
-                                   verified_at=now_str)
+                                   ocr_cert_id=None, verified_at=now_str)
 
         db.log_verification(cert_id, None, None, 'AUTHENTIC',
                             'Valid certificate ID found in registry.', ip)
@@ -263,7 +263,7 @@ def verify():
                                reason='Certificate ID verified successfully.',
                                cert=cert, mode='id', computed_hash=None,
                                computed_phash=None, match_type='exact', visual_similarity=100.0,
-                               verified_at=now_str)
+                               ocr_cert_id=None, verified_at=now_str)
 
     # ── Verify by File Upload ──
     if 'certificate' not in request.files or request.files['certificate'].filename == '':
@@ -284,6 +284,7 @@ def verify():
     filename       = file.filename
     computed_hash  = db.compute_file_hash(file_bytes)
     computed_phash = db.compute_file_phash(file_bytes)
+    ocr_cert_id    = None
 
     # Tier 1: Try exact SHA-256 byte hash match
     cert = db.get_certificate_by_hash(computed_hash)
@@ -298,15 +299,26 @@ def verify():
             match_type = 'visual'
             similarity = sim
 
+    # Tier 3: If Tiers 1 & 2 miss, perform OCR / PDF text extraction & Regex match
+    if not cert:
+        extracted_text = db.extract_text_from_file(file_bytes, filename)
+        ocr_cert_id = db.extract_cert_id_from_text(extracted_text)
+        if ocr_cert_id:
+            ocr_cert = db.get_certificate_by_id(ocr_cert_id)
+            if ocr_cert:
+                cert = ocr_cert
+                match_type = 'ocr'
+                similarity = 100.0
+
     if not cert:
         db.log_verification(None, filename, computed_hash, 'INVALID',
-                            'No matching certificate found by SHA-256 or visual pHash.', ip)
+                            'No matching certificate found by SHA-256, visual pHash, or OCR text.', ip)
         return render_template('result.html', status='INVALID',
                                reason='No matching certificate found in the registry. '
                                       'The file may have been altered significantly or was never issued.',
                                cert=None, mode='file', computed_hash=computed_hash,
                                computed_phash=computed_phash, match_type=None, visual_similarity=0.0,
-                               verified_at=now_str)
+                               ocr_cert_id=None, verified_at=now_str)
 
     if cert['status'] == 'revoked':
         db.log_verification(cert['cert_id'], filename, computed_hash, 'REVOKED',
@@ -315,17 +327,22 @@ def verify():
                                reason='This certificate has been officially revoked by the issuing authority.',
                                cert=cert, mode='file', computed_hash=computed_hash,
                                computed_phash=computed_phash, match_type=match_type,
-                               visual_similarity=similarity, verified_at=now_str)
+                               visual_similarity=similarity, ocr_cert_id=ocr_cert_id,
+                               verified_at=now_str)
 
-    reason = 'File hash matches the registry exactly (100% byte-perfect).' if match_type == 'exact' \
-        else f'Visual content matches registered certificate ({similarity}% visual similarity).'
+    if match_type == 'exact':
+        reason = 'File hash matches the registry exactly (100% byte-perfect).'
+    elif match_type == 'visual':
+        reason = f'Visual content matches registered certificate ({similarity}% visual similarity).'
+    else:
+        reason = f'Certificate ID ({ocr_cert_id}) successfully extracted from document text via OCR/PDF parsing.'
 
     db.log_verification(cert['cert_id'], filename, computed_hash, 'AUTHENTIC', reason, ip)
     return render_template('result.html', status='AUTHENTIC',
                            reason=reason, cert=cert, mode='file',
                            computed_hash=computed_hash, computed_phash=computed_phash,
                            match_type=match_type, visual_similarity=similarity,
-                           verified_at=now_str)
+                           ocr_cert_id=ocr_cert_id, verified_at=now_str)
 
 
 @app.route('/verify/<cert_id>')
@@ -342,7 +359,7 @@ def verify_by_id(cert_id):
                                reason='Certificate ID not found in the registry.',
                                cert=None, mode='id', computed_hash=None,
                                computed_phash=None, match_type=None, visual_similarity=0.0,
-                               verified_at=now_str)
+                               ocr_cert_id=None, verified_at=now_str)
 
     if cert['status'] == 'revoked':
         db.log_verification(cert_id, None, None, 'REVOKED', 'QR scan: certificate revoked.', ip)
@@ -350,14 +367,14 @@ def verify_by_id(cert_id):
                                reason='This certificate has been officially revoked.',
                                cert=cert, mode='id', computed_hash=None,
                                computed_phash=None, match_type=None, visual_similarity=0.0,
-                               verified_at=now_str)
+                               ocr_cert_id=None, verified_at=now_str)
 
     db.log_verification(cert_id, None, None, 'AUTHENTIC', 'QR scan: certificate verified.', ip)
     return render_template('result.html', status='AUTHENTIC',
                            reason='Certificate verified via QR code.',
                            cert=cert, mode='id', computed_hash=None,
                            computed_phash=None, match_type='exact', visual_similarity=100.0,
-                           verified_at=now_str)
+                           ocr_cert_id=None, verified_at=now_str)
 
 
 @app.route('/download/<cert_id>')

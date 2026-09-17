@@ -1,7 +1,7 @@
 """
 db.py - Database initialization and helper functions for the Certificate Verification System.
 Uses SQLite for persistence. All certificate data and verification logs are stored here.
-Includes cryptographic SHA-256 and perceptual image hashing (pHash).
+Includes cryptographic SHA-256, perceptual image hashing (pHash), and OCR/PDF text extraction.
 """
 
 import sqlite3
@@ -10,9 +10,12 @@ import hmac
 import uuid
 import os
 import io
+import re
 from datetime import datetime
 from PIL import Image
 import imagehash
+import pypdf
+import pytesseract
 
 DB_PATH = os.path.join(os.path.dirname(__file__), 'database.db')
 
@@ -178,7 +181,7 @@ def generate_cert_id():
     return f'CERT-{year}-{unique}'
 
 
-# ─── File Hashing & Perceptual Hashing (pHash) ────────────────────────────────
+# ─── File Hashing, pHash & OCR Text Extraction ───────────────────────────────
 
 def compute_file_hash(file_bytes: bytes) -> str:
     """Compute exact SHA-256 hash of file bytes."""
@@ -198,6 +201,48 @@ def compute_file_phash(file_bytes: bytes) -> str:
         return str(h)
     except Exception:
         return None
+
+
+def extract_text_from_file(file_bytes: bytes, filename: str = '') -> str:
+    """
+    Extract text content from uploaded file bytes.
+    Supports native PDF parsing via pypdf and OCR image parsing via pytesseract (with graceful fallback).
+    """
+    extracted_text = ""
+    ext = filename.rsplit('.', 1)[-1].lower() if '.' in filename else ''
+
+    # 1. Native PDF text extraction
+    if ext == 'pdf' or file_bytes.startswith(b'%PDF'):
+        try:
+            reader = pypdf.PdfReader(io.BytesIO(file_bytes))
+            for page in reader.pages:
+                t = page.extract_text()
+                if t:
+                    extracted_text += t + "\n"
+        except Exception:
+            pass
+
+    # 2. OCR Image text extraction via pytesseract
+    if not extracted_text:
+        try:
+            img = Image.open(io.BytesIO(file_bytes))
+            if img.mode != 'RGB':
+                img = img.convert('RGB')
+            extracted_text = pytesseract.image_to_string(img)
+        except Exception:
+            pass
+
+    return extracted_text
+
+
+def extract_cert_id_from_text(text: str) -> str:
+    """
+    Scan text using regex to extract a Certificate ID pattern matching CERT-YYYY-XXXXXX.
+    """
+    if not text:
+        return None
+    match = re.search(r'CERT-\d{4}-[A-Z0-9]{3,8}', text, re.IGNORECASE)
+    return match.group(0).upper() if match else None
 
 
 # ─── Certificate CRUD ────────────────────────────────────────────────────────
