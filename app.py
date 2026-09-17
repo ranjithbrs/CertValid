@@ -436,6 +436,17 @@ def verify():
                                    ocr_cert_id=None, signature_valid=sig_valid, public_key_b64=pub_key_b64,
                                    verified_at=now_str)
 
+        if cert.get('is_expired') or cert.get('effective_status') == 'expired':
+            db.log_verification(cert_id, None, None, 'EXPIRED',
+                                f'Certificate expired on {cert.get("expires_at")}.', ip)
+            m_root = merkle.build_merkle_tree(db.get_all_certificates())['root']
+            return render_template('result.html', status='EXPIRED',
+                                   reason=f'This certificate was officially issued but its validity expired on {cert.get("expires_at")}.',
+                                   cert=cert, mode='id', computed_hash=None,
+                                   computed_phash=None, match_type='exact', visual_similarity=100.0,
+                                   ocr_cert_id=None, signature_valid=sig_valid, public_key_b64=pub_key_b64,
+                                   merkle_root=m_root, verified_at=now_str)
+
         db.log_verification(cert_id, None, None, 'AUTHENTIC',
                             'Valid certificate ID found in registry.', ip)
         m_root = merkle.build_merkle_tree(db.get_all_certificates())['root']
@@ -518,6 +529,18 @@ def verify():
                                signature_valid=sig_valid, public_key_b64=pub_key_b64,
                                verified_at=now_str)
 
+    if cert.get('is_expired') or cert.get('effective_status') == 'expired':
+        db.log_verification(cert['cert_id'], filename, computed_hash, 'EXPIRED',
+                            f'Certificate expired on {cert.get("expires_at")}.', ip)
+        m_root = merkle.build_merkle_tree(db.get_all_certificates())['root']
+        return render_template('result.html', status='EXPIRED',
+                               reason=f'This certificate file is authentic but its official validity expired on {cert.get("expires_at")}.',
+                               cert=cert, mode='file', computed_hash=computed_hash,
+                               computed_phash=computed_phash, match_type=match_type,
+                               visual_similarity=similarity, ocr_cert_id=ocr_cert_id,
+                               signature_valid=sig_valid, public_key_b64=pub_key_b64,
+                               merkle_root=m_root, verified_at=now_str)
+
     if match_type == 'exact':
         reason = 'File hash matches the registry exactly (100% byte-perfect).'
     elif match_type == 'visual':
@@ -567,6 +590,16 @@ def verify_by_id(cert_id):
                                computed_phash=None, match_type=None, visual_similarity=0.0,
                                ocr_cert_id=None, signature_valid=sig_valid, public_key_b64=pub_key_b64,
                                verified_at=now_str)
+
+    if cert.get('is_expired') or cert.get('effective_status') == 'expired':
+        db.log_verification(cert_id, None, None, 'EXPIRED', f'QR scan: certificate expired on {cert.get("expires_at")}.', ip)
+        m_root = merkle.build_merkle_tree(db.get_all_certificates())['root']
+        return render_template('result.html', status='EXPIRED',
+                               reason=f'This certificate was officially issued but its validity expired on {cert.get("expires_at")}.',
+                               cert=cert, mode='id', computed_hash=None,
+                               computed_phash=None, match_type='exact', visual_similarity=100.0,
+                               ocr_cert_id=None, signature_valid=sig_valid, public_key_b64=pub_key_b64,
+                               merkle_root=m_root, verified_at=now_str)
 
     db.log_verification(cert_id, None, None, 'AUTHENTIC', 'QR scan: certificate verified.', ip)
     m_root = merkle.build_merkle_tree(db.get_all_certificates())['root']
@@ -1023,6 +1056,7 @@ def admin_issue():
     course_name  = request.form.get('course_name',  '').strip()
     issue_date   = request.form.get('issue_date',   '').strip()
     issuer_name  = request.form.get('issuer_name',  '').strip()
+    expires_at   = request.form.get('expires_at',   '').strip() or None
 
     if not all([student_name, course_name, issue_date, issuer_name]):
         flash('All fields are required to issue a certificate.', 'error')
@@ -1030,7 +1064,7 @@ def admin_issue():
 
     unique_seed = f'{student_name}|{course_name}|{issue_date}|{issuer_name}|{uuid.uuid4()}'
     file_hash   = hashlib.sha256(unique_seed.encode()).hexdigest()
-    cert_id     = db.add_certificate(student_name, course_name, issue_date, issuer_name, file_hash)
+    cert_id     = db.add_certificate(student_name, course_name, issue_date, issuer_name, file_hash, expires_at=expires_at)
 
     cert_data = {
         'student_name': student_name,
@@ -1050,6 +1084,7 @@ def admin_issue():
         'course_name': course_name,
         'issuer_name': issuer_name,
         'issue_date': issue_date,
+        'expires_at': expires_at,
         'issued_by': session.get('admin_user', 'admin')
     })
 
@@ -1062,10 +1097,10 @@ def admin_issue():
 def admin_sample_csv():
     """Download sample CSV template for bulk certificate issuance."""
     sample_content = (
-        "student_name,course_name,issue_date,issuer_name\n"
-        "Aarav Patel,Full Stack Web Development,2026-09-17,CertValid University\n"
-        "Ananya Roy,Data Science & Machine Learning,2026-09-17,CertValid Institute\n"
-        "Vikram Singh,Cybersecurity Fundamentals,2026-09-17,CertValid Academy\n"
+        "student_name,course_name,issue_date,issuer_name,expires_at\n"
+        "Aarav Patel,Full Stack Web Development,2026-09-17,CertValid University,2028-09-17\n"
+        "Ananya Roy,Data Science & Machine Learning,2026-09-17,CertValid Institute,\n"
+        "Vikram Singh,Cybersecurity Fundamentals,2026-09-17,CertValid Academy,2027-09-17\n"
     )
     response = make_response(sample_content)
     response.headers["Content-Disposition"] = "attachment; filename=sample_bulk_certificates.csv"
@@ -1101,17 +1136,18 @@ def admin_issue_bulk():
         with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zip_file:
             for row in reader:
                 row_clean = {k.strip().lower(): v.strip() for k, v in row.items() if k}
-                s_name = row_clean.get('student_name', '')
-                c_name = row_clean.get('course_name', '')
-                i_date = row_clean.get('issue_date', '')
-                i_name = row_clean.get('issuer_name', '')
+                s_name   = row_clean.get('student_name', '')
+                c_name   = row_clean.get('course_name', '')
+                i_date   = row_clean.get('issue_date', '')
+                i_name   = row_clean.get('issuer_name', '')
+                exp_date = row_clean.get('expires_at') or None
 
                 if not all([s_name, c_name, i_date, i_name]):
                     continue
 
                 seed = f'{s_name}|{c_name}|{i_date}|{i_name}|{uuid.uuid4()}'
                 file_hash = hashlib.sha256(seed.encode()).hexdigest()
-                cert_id = db.add_certificate(s_name, c_name, i_date, i_name, file_hash)
+                cert_id = db.add_certificate(s_name, c_name, i_date, i_name, file_hash, expires_at=exp_date)
 
                 cert_data = {
                     'student_name': s_name,
