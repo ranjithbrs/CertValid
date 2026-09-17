@@ -4,5 +4,7 @@ Flask-Limiter>=3.0.0
 ImageHash>=4.3.0
 Pillow>=10.0.0
 pypdf>=5.0.0
+psycopg2-binary>=2.9.0
 pytesseract>=0.3.10
 qrcode>=7.4.2
+SQLAlchemy>=2.0.0

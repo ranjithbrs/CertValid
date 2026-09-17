@@ -1,7 +1,7 @@
 """
 db.py - Database initialization and helper functions for the Certificate Verification System.
-Uses SQLite for persistence. All certificate data and verification logs are stored here.
-Includes SHA-256, pHash, OCR text extraction, and Ed25519 Asymmetric Cryptographic Digital Signatures.
+Uses SQLite for local persistence or PostgreSQL/MySQL via DATABASE_URL environment variable.
+Includes SHA-256, pHash, OCR text extraction, Ed25519 digital signatures, and SQLAlchemy database abstraction.
 """
 
 import sqlite3
@@ -19,6 +19,8 @@ import pypdf
 import pytesseract
 from cryptography.hazmat.primitives.asymmetric import ed25519
 from cryptography.hazmat.primitives import serialization
+import sqlalchemy
+from sqlalchemy import create_engine
 
 DB_PATH = os.path.join(os.path.dirname(__file__), 'database.db')
 KEYS_DIR = os.path.join(os.path.dirname(__file__), 'instance', 'keys')
@@ -28,11 +30,27 @@ PUB_KEY_PATH = os.path.join(KEYS_DIR, 'ed25519_public.pem')
 _private_key = None
 _public_key = None
 
+# Database connection URL setup (SQLAlchemy)
+DATABASE_URL = os.environ.get('DATABASE_URL', '')
+if DATABASE_URL.startswith('postgres://'):
+    DATABASE_URL = DATABASE_URL.replace('postgres://', 'postgresql://', 1)
+
+_engine = None
+if DATABASE_URL:
+    _engine = create_engine(DATABASE_URL, pool_pre_ping=True)
+
 
 # ─── Connection ───────────────────────────────────────────────────────────────
 
 def get_db():
-    """Get a database connection with WAL mode for better concurrency."""
+    """
+    Get a database connection.
+    Connects to PostgreSQL/MySQL if DATABASE_URL is provided, or local SQLite database.db.
+    """
+    if _engine:
+        conn = _engine.raw_connection()
+        return conn
+
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     conn.execute('PRAGMA journal_mode=WAL')
@@ -162,11 +180,15 @@ def init_db():
     ''')
 
     # Migration checks: ensure phash and signature columns exist
-    columns = [r['name'] for r in c.execute("PRAGMA table_info(certificates)").fetchall()]
-    if 'phash' not in columns:
-        c.execute("ALTER TABLE certificates ADD COLUMN phash TEXT")
-    if 'signature' not in columns:
-        c.execute("ALTER TABLE certificates ADD COLUMN signature TEXT")
+    try:
+        columns = [r['name'] if isinstance(r, dict) or hasattr(r, '__getitem__') else r[1]
+                   for r in c.execute("PRAGMA table_info(certificates)").fetchall()]
+        if 'phash' not in columns:
+            c.execute("ALTER TABLE certificates ADD COLUMN phash TEXT")
+        if 'signature' not in columns:
+            c.execute("ALTER TABLE certificates ADD COLUMN signature TEXT")
+    except Exception:
+        pass
 
     # Index on file_hash for O(1) exact lookups
     c.execute('''
