@@ -32,10 +32,15 @@
         <div class="result-icon">✅</div>
         <div class="result-title" style="color: var(--emerald-light);">Certificate Authentic</div>
         <p class="result-reason">{{ reason }}</p>
-        <div style="margin-top:1rem;">
+        <div style="margin-top:1rem; display:flex; gap:.5rem; justify-content:center; align-items:center; flex-wrap:wrap;">
           <span class="badge badge-authentic">
             <span class="pulse-dot pulse-green"></span> AUTHENTIC
           </span>
+          {% if match_type == 'exact' %}
+            <span class="badge badge-authentic">100% Exact Byte Match</span>
+          {% elif match_type == 'visual' %}
+            <span class="badge badge-authentic">👁️ {{ visual_similarity }}% Visual Match</span>
+          {% endif %}
         </div>
       </div>
     {% elif status_upper == 'REVOKED' %}
@@ -110,10 +115,10 @@
     </div>
     {% endif %}
 
-    <!-- Cryptographic Audit -->
+    <!-- Cryptographic & Perceptual Audit -->
     <div class="card fade-in-up" style="animation-delay:.2s; margin-bottom:1.5rem;">
       <div class="section-header">
-        <span class="section-title">🔐 Cryptographic Audit</span>
+        <span class="section-title">🔐 Cryptographic & Perceptual Audit</span>
       </div>
 
       {% if computed_hash %}
@@ -123,25 +128,30 @@
         </div>
       {% endif %}
 
+      {% if computed_phash %}
+        <div class="form-group">
+          <div class="form-label">Computed Perceptual Hash (pHash)</div>
+          <div class="hash-block" style="color:var(--emerald-light);">{{ computed_phash }}</div>
+        </div>
+      {% endif %}
+
       {% if cert and cert.file_hash %}
         <div class="form-group">
           <div class="form-label">Registry SHA-256 Hash</div>
           <div class="hash-block">{{ cert.file_hash }}</div>
         </div>
 
-        {% if computed_hash %}
-          <div style="margin-top:.5rem; padding:.75rem 1rem; border-radius:8px; font-size:.9rem; font-weight:600;
-            {% if computed_hash == cert.file_hash %}
-              background: rgba(16,185,129,0.10); color: var(--emerald-light); border: 1px solid rgba(16,185,129,0.25);
-            {% else %}
-              background: rgba(239,68,68,0.10); color: var(--red-light); border: 1px solid rgba(239,68,68,0.25);
-            {% endif %}
-          ">
-            {% if computed_hash == cert.file_hash %}
-              ✅ Hashes match — file is byte-perfect and unmodified.
-            {% else %}
-              ⚠️ Hash mismatch — file content differs from registered copy.
-            {% endif %}
+        {% if match_type == 'exact' %}
+          <div style="margin-top:.5rem; padding:.75rem 1rem; border-radius:8px; font-size:.9rem; font-weight:600; background: rgba(16,185,129,0.10); color: var(--emerald-light); border: 1px solid rgba(16,185,129,0.25);">
+            ✅ SHA-256 Exact Byte Match — file is byte-perfect and unmodified.
+          </div>
+        {% elif match_type == 'visual' %}
+          <div style="margin-top:.5rem; padding:.75rem 1rem; border-radius:8px; font-size:.9rem; font-weight:600; background: rgba(16,185,129,0.10); color: var(--emerald-light); border: 1px solid rgba(16,185,129,0.25);">
+            👁️ Perceptual Hash Match ({{ visual_similarity }}% Visual Similarity) — image is visually authentic (re-saved, compressed, or resized file).
+          </div>
+        {% elif computed_hash %}
+          <div style="margin-top:.5rem; padding:.75rem 1rem; border-radius:8px; font-size:.9rem; font-weight:600; background: rgba(239,68,68,0.10); color: var(--red-light); border: 1px solid rgba(239,68,68,0.25);">
+            ⚠️ Hash Mismatch — file content differs significantly from registered copy.
           </div>
         {% endif %}
       {% endif %}
@@ -166,7 +176,11 @@
         <div class="info-card">
           <div class="info-card-label">Verification Method</div>
           <div class="info-card-value">
-            {% if mode == 'file' %}📄 File Hash{% else %}🔍 Certificate ID{% endif %}
+            {% if mode == 'file' %}
+              {% if match_type == 'exact' %}📄 SHA-256 Byte Hash{% else %}👁️ Perceptual Visual Hash{% endif %}
+            {% else %}
+              🔍 Certificate ID
+            {% endif %}
           </div>
         </div>
         <div class="info-card">

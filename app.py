@@ -1,10 +1,11 @@
 """
 app.py - Flask application for the Certificate Verification & Management System.
 Handles public verification (file upload or cert ID), admin dashboard, certificate issuance.
-Includes rate limiting, anti-spam protection, and security headers.
+Includes rate limiting, anti-spam protection, security headers, and Perceptual Image Hashing (pHash).
 """
 
 import os
+import io
 import uuid
 import hashlib
 from datetime import datetime, timedelta
@@ -18,6 +19,7 @@ from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
 from PIL import Image, ImageDraw, ImageFont
 import qrcode
+import imagehash
 
 import db
 
@@ -83,6 +85,7 @@ def login_required(f):
 def generate_certificate_image(cert_data: dict, cert_id: str) -> str:
     """
     Generate a certificate PNG image with embedded QR code.
+    Computes and stores its perceptual hash (pHash) in the database.
     Returns the relative path (relative to static/) to the saved image.
     """
     W, H = 1100, 780
@@ -180,6 +183,14 @@ def generate_certificate_image(cert_data: dict, cert_id: str) -> str:
     filename  = f'{cert_id}.png'
     save_path = os.path.join(CERT_FOLDER, filename)
     img.save(save_path, 'PNG')
+
+    # Compute pHash of generated image and update database record
+    try:
+        phash_str = str(imagehash.phash(img))
+        db.update_certificate_phash(cert_id, phash_str)
+    except Exception as e:
+        app.logger.error(f'Failed to compute/update pHash for {cert_id}: {e}')
+
     return f'certs/{filename}'
 
 
@@ -234,6 +245,7 @@ def verify():
             return render_template('result.html', status='INVALID',
                                    reason='Certificate ID not found in the registry.',
                                    cert=None, mode='id', computed_hash=None,
+                                   computed_phash=None, match_type=None, visual_similarity=0.0,
                                    verified_at=now_str)
 
         if cert['status'] == 'revoked':
@@ -242,6 +254,7 @@ def verify():
             return render_template('result.html', status='REVOKED',
                                    reason='This certificate has been officially revoked.',
                                    cert=cert, mode='id', computed_hash=None,
+                                   computed_phash=None, match_type=None, visual_similarity=0.0,
                                    verified_at=now_str)
 
         db.log_verification(cert_id, None, None, 'AUTHENTIC',
@@ -249,6 +262,7 @@ def verify():
         return render_template('result.html', status='AUTHENTIC',
                                reason='Certificate ID verified successfully.',
                                cert=cert, mode='id', computed_hash=None,
+                               computed_phash=None, match_type='exact', visual_similarity=100.0,
                                verified_at=now_str)
 
     # ── Verify by File Upload ──
@@ -267,17 +281,31 @@ def verify():
         flash(f'File too large. Max size is {MAX_FILE_SIZE_MB} MB.', 'error')
         return redirect(url_for('index'))
 
-    computed_hash = db.compute_file_hash(file_bytes)
-    cert          = db.get_certificate_by_hash(computed_hash)
-    filename      = file.filename
+    filename       = file.filename
+    computed_hash  = db.compute_file_hash(file_bytes)
+    computed_phash = db.compute_file_phash(file_bytes)
+
+    # Tier 1: Try exact SHA-256 byte hash match
+    cert = db.get_certificate_by_hash(computed_hash)
+    match_type = 'exact'
+    similarity = 100.0
+
+    # Tier 2: If SHA-256 misses, try Perceptual Hash (pHash) visual similarity match
+    if not cert and computed_phash:
+        phash_match, dist, sim = db.get_certificate_by_phash(computed_phash, max_distance=10)
+        if phash_match:
+            cert = phash_match
+            match_type = 'visual'
+            similarity = sim
 
     if not cert:
         db.log_verification(None, filename, computed_hash, 'INVALID',
-                            'No matching certificate found. File may be tampered or unregistered.', ip)
+                            'No matching certificate found by SHA-256 or visual pHash.', ip)
         return render_template('result.html', status='INVALID',
                                reason='No matching certificate found in the registry. '
-                                      'The file may have been tampered with or was never issued.',
+                                      'The file may have been altered significantly or was never issued.',
                                cert=None, mode='file', computed_hash=computed_hash,
+                               computed_phash=computed_phash, match_type=None, visual_similarity=0.0,
                                verified_at=now_str)
 
     if cert['status'] == 'revoked':
@@ -286,13 +314,17 @@ def verify():
         return render_template('result.html', status='REVOKED',
                                reason='This certificate has been officially revoked by the issuing authority.',
                                cert=cert, mode='file', computed_hash=computed_hash,
-                               verified_at=now_str)
+                               computed_phash=computed_phash, match_type=match_type,
+                               visual_similarity=similarity, verified_at=now_str)
 
-    db.log_verification(cert['cert_id'], filename, computed_hash, 'AUTHENTIC',
-                        'File hash matches registry. No tampering detected.', ip)
+    reason = 'File hash matches the registry exactly (100% byte-perfect).' if match_type == 'exact' \
+        else f'Visual content matches registered certificate ({similarity}% visual similarity).'
+
+    db.log_verification(cert['cert_id'], filename, computed_hash, 'AUTHENTIC', reason, ip)
     return render_template('result.html', status='AUTHENTIC',
-                           reason='File hash matches the registry. No tampering detected.',
-                           cert=cert, mode='file', computed_hash=computed_hash,
+                           reason=reason, cert=cert, mode='file',
+                           computed_hash=computed_hash, computed_phash=computed_phash,
+                           match_type=match_type, visual_similarity=similarity,
                            verified_at=now_str)
 
 
@@ -309,6 +341,7 @@ def verify_by_id(cert_id):
         return render_template('result.html', status='INVALID',
                                reason='Certificate ID not found in the registry.',
                                cert=None, mode='id', computed_hash=None,
+                               computed_phash=None, match_type=None, visual_similarity=0.0,
                                verified_at=now_str)
 
     if cert['status'] == 'revoked':
@@ -316,12 +349,14 @@ def verify_by_id(cert_id):
         return render_template('result.html', status='REVOKED',
                                reason='This certificate has been officially revoked.',
                                cert=cert, mode='id', computed_hash=None,
+                               computed_phash=None, match_type=None, visual_similarity=0.0,
                                verified_at=now_str)
 
     db.log_verification(cert_id, None, None, 'AUTHENTIC', 'QR scan: certificate verified.', ip)
     return render_template('result.html', status='AUTHENTIC',
                            reason='Certificate verified via QR code.',
                            cert=cert, mode='id', computed_hash=None,
+                           computed_phash=None, match_type='exact', visual_similarity=100.0,
                            verified_at=now_str)
 
 
@@ -357,7 +392,7 @@ def admin():
         username = request.form.get('username', '')
         password = request.form.get('password', '')
         if db.verify_admin(username, password):
-            session.permanent = True          # enforce 1-hour lifetime
+            session.permanent = True
             session['admin_logged_in'] = True
             session['admin_user'] = username
             return redirect(url_for('admin_dashboard'))

@@ -1,6 +1,7 @@
 """
 db.py - Database initialization and helper functions for the Certificate Verification System.
 Uses SQLite for persistence. All certificate data and verification logs are stored here.
+Includes cryptographic SHA-256 and perceptual image hashing (pHash).
 """
 
 import sqlite3
@@ -8,7 +9,10 @@ import hashlib
 import hmac
 import uuid
 import os
+import io
 from datetime import datetime
+from PIL import Image
+import imagehash
 
 DB_PATH = os.path.join(os.path.dirname(__file__), 'database.db')
 
@@ -49,10 +53,10 @@ def _is_legacy_sha256(stored_hash: str) -> bool:
     return ':' not in stored_hash
 
 
-# ─── Schema Init ─────────────────────────────────────────────────────────────
+# ─── Schema Init & Migration ──────────────────────────────────────────────────
 
 def init_db():
-    """Initialize database tables, indexes, and seed sample data if empty."""
+    """Initialize database tables, indexes, schema migrations, and seed sample data."""
     conn = get_db()
     c = conn.cursor()
 
@@ -66,12 +70,18 @@ def init_db():
             issue_date TEXT NOT NULL,
             issuer_name TEXT NOT NULL,
             file_hash TEXT NOT NULL,
+            phash TEXT,
             status TEXT NOT NULL DEFAULT 'active',
             created_at TEXT NOT NULL
         )
     ''')
 
-    # Performance: index on file_hash for O(1) lookups on every file upload verify
+    # Migration check: ensure phash column exists if table was created earlier
+    columns = [r['name'] for r in c.execute("PRAGMA table_info(certificates)").fetchall()]
+    if 'phash' not in columns:
+        c.execute("ALTER TABLE certificates ADD COLUMN phash TEXT")
+
+    # Index on file_hash for O(1) exact lookups
     c.execute('''
         CREATE INDEX IF NOT EXISTS idx_file_hash ON certificates(file_hash)
     ''')
@@ -168,28 +178,51 @@ def generate_cert_id():
     return f'CERT-{year}-{unique}'
 
 
-# ─── File Hash ────────────────────────────────────────────────────────────────
+# ─── File Hashing & Perceptual Hashing (pHash) ────────────────────────────────
 
 def compute_file_hash(file_bytes: bytes) -> str:
-    """Compute SHA-256 hash of file bytes."""
+    """Compute exact SHA-256 hash of file bytes."""
     return hashlib.sha256(file_bytes).hexdigest()
+
+
+def compute_file_phash(file_bytes: bytes) -> str:
+    """
+    Compute Perceptual Hash (pHash) of an image file.
+    Returns 16-character hex string representing the 64-bit visual hash, or None if invalid.
+    """
+    try:
+        img = Image.open(io.BytesIO(file_bytes))
+        if img.mode != 'RGB':
+            img = img.convert('RGB')
+        h = imagehash.phash(img)
+        return str(h)
+    except Exception:
+        return None
 
 
 # ─── Certificate CRUD ────────────────────────────────────────────────────────
 
-def add_certificate(student_name, course_name, issue_date, issuer_name, file_hash):
+def add_certificate(student_name, course_name, issue_date, issuer_name, file_hash, phash=None):
     """Insert a new certificate record. Returns the generated cert_id."""
     cert_id = generate_cert_id()
     now = datetime.now().isoformat(sep=' ', timespec='seconds')
     conn = get_db()
     conn.execute('''
         INSERT INTO certificates
-        (cert_id, student_name, course_name, issue_date, issuer_name, file_hash, status, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, 'active', ?)
-    ''', (cert_id, student_name, course_name, issue_date, issuer_name, file_hash, now))
+        (cert_id, student_name, course_name, issue_date, issuer_name, file_hash, phash, status, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, 'active', ?)
+    ''', (cert_id, student_name, course_name, issue_date, issuer_name, file_hash, phash, now))
     conn.commit()
     conn.close()
     return cert_id
+
+
+def update_certificate_phash(cert_id, phash):
+    """Update the pHash field for a certificate record."""
+    conn = get_db()
+    conn.execute("UPDATE certificates SET phash = ? WHERE cert_id = ?", (phash, cert_id))
+    conn.commit()
+    conn.close()
 
 
 def get_certificate_by_id(cert_id):
@@ -201,11 +234,51 @@ def get_certificate_by_id(cert_id):
 
 
 def get_certificate_by_hash(file_hash):
-    """Fetch a certificate record by its file hash (uses index)."""
+    """Fetch a certificate record by its exact SHA-256 file hash."""
     conn = get_db()
     row = conn.execute('SELECT * FROM certificates WHERE file_hash = ?', (file_hash,)).fetchone()
     conn.close()
     return dict(row) if row else None
+
+
+def get_certificate_by_phash(uploaded_phash_str, max_distance=10):
+    """
+    Match an uploaded image's pHash against all active registered certificates using Hamming distance.
+    Threshold max_distance = 10 bits out of 64 (>= 84.4% visual similarity).
+    Returns (certificate_dict, distance, similarity_percent) or (None, None, 0.0).
+    """
+    if not uploaded_phash_str:
+        return None, None, 0.0
+
+    try:
+        target_hash = imagehash.hex_to_hash(uploaded_phash_str)
+    except Exception:
+        return None, None, 0.0
+
+    conn = get_db()
+    rows = conn.execute(
+        "SELECT * FROM certificates WHERE phash IS NOT NULL AND phash != ''"
+    ).fetchall()
+    conn.close()
+
+    best_match = None
+    min_dist = 999
+
+    for r in rows:
+        try:
+            h = imagehash.hex_to_hash(r['phash'])
+            dist = target_hash - h
+            if dist < min_dist:
+                min_dist = dist
+                best_match = dict(r)
+        except Exception:
+            continue
+
+    if best_match and min_dist <= max_distance:
+        similarity = round((1.0 - (min_dist / 64.0)) * 100, 1)
+        return best_match, min_dist, similarity
+
+    return None, None, 0.0
 
 
 def get_all_certificates():
@@ -311,11 +384,9 @@ def verify_admin(username, password):
 
     stored_hash = row['password_hash']
 
-    # Legacy: old plain SHA-256 hash — verify and silently upgrade to PBKDF2
     if _is_legacy_sha256(stored_hash):
         old_hash = hashlib.sha256(password.encode()).hexdigest()
         if hmac.compare_digest(old_hash, stored_hash):
-            # Upgrade to PBKDF2 on the fly
             new_hash = _hash_password(password)
             conn.execute(
                 'UPDATE admin_users SET password_hash = ? WHERE username = ?',
