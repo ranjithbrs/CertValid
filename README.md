@@ -1,12 +1,12 @@
-# 🛡️ CertValid — Certificate Verification & Management System
+# 🛡️ CertValid — Enterprise Certificate Verification & Management System
 
 [![Live Demo](https://img.shields.io/badge/Live%20Demo-PythonAnywhere-brightgreen?style=for-the-badge&logo=python&logoColor=white)](https://ranjithbrs.pythonanywhere.com)
 [![Framework: Flask](https://img.shields.io/badge/Framework-Flask-000000?style=for-the-badge&logo=flask&logoColor=white)](https://flask.palletsprojects.com/)
-[![Database: SQLite WAL](https://img.shields.io/badge/Database-SQLite%20WAL-003B57?style=for-the-badge&logo=sqlite&logoColor=white)](https://www.sqlite.org/)
-[![Security: SHA--256](https://img.shields.io/badge/Security-SHA--256%20%2B%20PBKDF2-red?style=for-the-badge&logo=securityscorecard&logoColor=white)](app.py)
+[![Database: SQLAlchemy](https://img.shields.io/badge/Database-SQLAlchemy%20%2F%20PostgreSQL-003B57?style=for-the-badge&logo=postgresql&logoColor=white)](https://www.sqlalchemy.org/)
+[![Security: Ed25519](https://img.shields.io/badge/Security-Ed25519%20Digital%20Signatures-indigo?style=for-the-badge&logo=securityscorecard&logoColor=white)](app.py)
 [![License: MIT](https://img.shields.io/badge/License-MIT-purple?style=for-the-badge)](LICENSE)
 
-> A modern, enterprise-ready **Flask-based** Certificate Verification & Management System. Features cryptographic SHA-256 file tamper detection, instant Certificate ID lookup, scannable QR code generation, dynamic PNG certificate rendering with Pillow, salted PBKDF2-HMAC-SHA256 admin security, and an administrative dashboard with real-time audit trail logging.
+> An enterprise-grade **Flask-based** Certificate Verification & Management System. Features 3-tier multi-modal verification (SHA-256 byte hashing, 64-bit Perceptual Image Hashing, and OCR PDF/text parsing), Ed25519 asymmetric cryptographic digital signatures, AWS S3 cloud storage, Flask-Limiter rate limiting, and Role-Based Access Control (RBAC).
 
 ---
 
@@ -18,73 +18,57 @@
 
 ---
 
-## 📑 Table of Contents
-- [Architecture & Verification Workflow](#-verification-workflow-architecture)
-- [Key Features](#-key-features)
-- [Live Test Certificates](#-sample-certificates-for-live-testing)
-- [Admin Access](#-default-admin-credentials)
-- [API & Route Specifications](#-api--route-specifications)
-- [Local Setup & Development](#-quick-start-local-setup)
-- [Deployment (PythonAnywhere)](#-deploying-to-pythonanywhere)
-- [Project Structure](#-project-structure)
-- [Technology Stack](#-technology-stack)
-- [Author & Connect](#-author)
-- [License](#-license)
-
----
-
-## 🔒 Verification Workflow Architecture
+## 🔒 Multi-Layer Verification Architecture
 
 ```mermaid
 flowchart TD
-    subgraph Client["🖥️ Public & Admin Interface"]
-        A[User: Drag & Drop File Upload] --> C{Routing Engine}
-        B[User: Manual Certificate ID Entry] --> C
-        QR[Mobile Device: Scan QR Code] --> C
+    subgraph Client["🖥️ Verification Inputs"]
+        A[User Uploads File / PDF / Image] --> C{Verification Controller}
+        B[User Enters Certificate ID] --> C
+        QR[Scans QR Code] --> C
     end
 
-    subgraph CoreEngine["⚙️ Flask Application Core (app.py)"]
-        C -->|File Upload| D[Compute Cryptographic SHA-256 Digest]
-        C -->|ID or QR Route| E[Sanitize & Format Certificate ID]
-        D --> F{Indexed DB Hash Lookup}
-        E --> G{Indexed DB ID Lookup}
+    subgraph Tier1["Tier 1: Cryptographic SHA-256"]
+        C -->|File Upload| D[Compute SHA-256 Digest]
+        D --> E{Exact DB Hash Match?}
+        E -->|Match Found| OK[✅ AUTHENTIC: Exact Byte Match]
     end
 
-    subgraph Storage["🗄️ SQLite Database Layer (db.py - WAL Mode)"]
-        F -->|Hash Found| H[Retrieve Certificate Record]
-        F -->|Hash Not Found| I[Flag as UNREGISTERED / TAMPERED]
-        G -->|Record Exists| H
-        G -->|Record Missing| I
+    subgraph Tier2["Tier 2: Perceptual Image Hash (pHash)"]
+        E -->|Mismatch| F[Compute 64-bit pHash & Hamming Distance]
+        F --> G{Visual Similarity >= 84%?}
+        G -->|Visual Match| OK2[👁️ AUTHENTIC: Visual Image Match]
     end
 
-    subgraph Security["🛡️ Verification & Authorization Logic"]
-        H --> J{Check Certificate Status}
-        J -->|status == 'active'| K[✅ AUTHENTIC: Render Verification Certificate]
-        J -->|status == 'revoked'| L[🚫 REVOKED: Highlight Revocation Alert]
-        I --> M[❌ INVALID / ALTERED: Alert Security Audit]
+    subgraph Tier3["Tier 3: OCR & PDF Text Extraction"]
+        G -->|Mismatch| H[Extract PDF/Image Text & Parse CERT-YYYY-XXXXXX]
+        H --> I{Extracted ID Found in Registry?}
+        I -->|ID Match| OK3[📄 AUTHENTIC: OCR Text Match]
+        I -->|No Match| FAIL[❌ INVALID / ALTERED]
     end
 
-    subgraph AuditLog["📝 Audit Logging & Analytics"]
-        K --> N[(Audit Trail: Timestamp, IP, Hash, Status)]
-        L --> N
-        M --> N
-        N --> O[Admin Metrics & Verification Counter]
+    subgraph CryptoSign["🔏 Ed25519 Signature Verification"]
+        OK --> V[Verify Asymmetric Ed25519 Digital Signature]
+        OK2 --> V
+        OK3 --> V
     end
 ```
 
 ---
 
-## ✨ Key Features
+## ✨ Enterprise Features & Upgrades
 
-- 🔐 **Cryptographic SHA-256 Tamper Detection** — Uploaded certificate files (JPG/PNG/PDF) have their SHA-256 hash computed and compared against the indexed database registry. Any byte-level alteration instantly triggers a **TAMPERED / INVALID** warning.
-- 🛡️ **Salted PBKDF2 Password Security** — Admin credentials use `PBKDF2-HMAC-SHA256` (260,000 iterations + 16-byte random salt) with constant-time verification (`hmac.compare_digest`) to prevent timing attacks. Includes automatic migration for legacy credentials.
-- 🔍 **Dual Verification Modes** — Verify certificates seamlessly by either **Drag-and-Drop File Upload** or direct **Certificate ID Search**.
-- 📱 **Embedded Live-Domain QR Codes** — Every generated certificate incorporates a dynamic QR code pointing to the live verification route (`BASE_URL/verify/<cert_id>`). Scanning with any camera opens instant verification.
-- 🎓 **Dynamic High-Resolution PNG Generator** — Programmatically stamps recipient names, course titles, dates, signatures, and QR codes onto professional templates using **Pillow (PIL)**.
-- ⚡ **High-Performance SQLite in WAL Mode** — B-tree indexed `file_hash` ($O(1)$ lookups), Write-Ahead Logging (WAL) for concurrency, and aggregated single-query dashboard statistics.
-- 🚫 **Instant Revocation & Reactivation** — Full administrative control to revoke compromised credentials or reactivate verified records with immediate cache invalidation.
-- 📜 **Full Audit Logging** — Logs every verification attempt with precise timestamps, computed SHA-256 signatures, client IP addresses, and authentication outcomes.
-- 🎨 **Modern Dark Glassmorphism UI** — Built with clean HTML5 & CSS3 featuring glassmorphic cards, micro-interactions, responsive data tables, and custom-styled 404/500 error pages.
+- 🔏 **Ed25519 Asymmetric Digital Signatures** — Every certificate payload (`cert_id|name|course|date|hash`) is signed using an **Ed25519 Private Key**. Anyone holding the Public Key can verify mathematical authenticity offline without a database.
+- 👁️ **Perceptual Image Hashing (pHash)** — 64-bit visual hashing (`imagehash`) detects authentic certificates even if re-saved, compressed (PNG $\rightarrow$ JPG), or resized ($\ge 84.4\%$ similarity match).
+- 📄 **OCR & PDF Text Extraction** — Parses PDF text (`pypdf`) and scanned images (`pytesseract`) using regex matching (`r'CERT-\d{4}-[A-Z0-9]{3,8}'`) to verify uploaded documents.
+- 🛡️ **Flask-Limiter Rate Limiting** — Protects against request spam and brute-force attacks (10 req/min on `/verify`, 5 attempts/5min on `/admin`).
+- 🔐 **Salted PBKDF2 Password Security** — Credentials hashed via `PBKDF2-HMAC-SHA256` (260,000 iterations + 16-byte random salt) with constant-time verification (`hmac.compare_digest`).
+- 👥 **Role-Based Access Control (RBAC)** — Three granular roles:
+  - 👑 **`superadmin`**: Full system access (issue, revoke/reactivate, view logs).
+  - 🎓 **`issuer`**: Certificate issuance & registry access.
+  - 👁️ **`auditor`**: Read-only audit access.
+- 🗄️ **SQLAlchemy Database Abstraction** — Seamlessly switches between local **SQLite** (`database.db`) and production **PostgreSQL / MySQL** via `DATABASE_URL`.
+- ☁️ **AWS S3 Cloud Storage Adapter** — Uploads generated certificates to S3 buckets (`boto3`) with transparent local disk fallback.
 
 ---
 
@@ -104,26 +88,24 @@ Test the verification engine using these seeded records on the [Live Site](https
 
 Access the Admin Dashboard at [ranjithbrs.pythonanywhere.com/admin](https://ranjithbrs.pythonanywhere.com/admin):
 
-| Field | Default Value | Notes |
+| Field | Default Value | Role |
 | :--- | :--- | :--- |
-| **Username** | `admin` | Administrator login identifier |
+| **Username** | `admin` | `superadmin` |
 | **Password** | `admin123` | Salted & hashed via PBKDF2-HMAC-SHA256 |
 
 ---
 
-## 📡 API & Route Specifications
+## ⚙️ Environment Variables
 
-| Method | Endpoint | Description | Access |
-| :--- | :--- | :--- | :--- |
-| `GET` | `/` | Main public verification portal (file drag & drop + ID search) | Public |
-| `POST` | `/verify` | Processes file uploads, calculates SHA-256, and returns audit result | Public |
-| `GET` | `/verify/<cert_id>` | Direct URL lookup and target endpoint for scannable QR codes | Public |
-| `GET` | `/download/<cert_id>` | Generates and serves dynamic high-res certificate PNG | Public |
-| `GET` | `/admin` | Admin dashboard displaying statistics, audit logs, and issued certs | Admin Only |
-| `POST` | `/admin/issue` | Issues a new certificate, creates hash, and stores record | Admin Only |
-| `POST` | `/admin/revoke/<cert_id>` | Toggles certificate status between Active and Revoked | Admin Only |
-| `POST` | `/admin/login` | Authenticates administrator with salted PBKDF2 password | Public |
-| `GET` | `/admin/logout` | Terminates active admin session | Admin Only |
+| Variable | Description | Default Value |
+| :--- | :--- | :--- |
+| `DATABASE_URL` | PostgreSQL/MySQL URI (e.g., `postgresql://user:pass@host/db`) | SQLite (`database.db`) |
+| `BASE_URL` | Base URL embedded in generated QR codes | `https://ranjithbrs.pythonanywhere.com` |
+| `S3_BUCKET_NAME` | AWS S3 Bucket Name for cloud image storage | Local filesystem |
+| `AWS_ACCESS_KEY_ID` | AWS Access Key ID | None |
+| `AWS_SECRET_ACCESS_KEY` | AWS Secret Access Key | None |
+| `SECRET_KEY` | Flask session encryption key | Auto-generated 32-byte token |
+| `FLASK_DEBUG` | Enable Flask debug mode (`true` / `false`) | `false` |
 
 ---
 
@@ -145,85 +127,38 @@ pip install -r requirements.txt
 python app.py
 ```
 
-Access the application in your browser:
+Access in browser:
 - **Public Verification Portal:** `http://127.0.0.1:5000`
 - **Admin Dashboard:** `http://127.0.0.1:5000/admin`
 
 ---
 
-## ⚙️ Environment Variables (Optional)
-
-| Variable | Description | Default Value |
-| :--- | :--- | :--- |
-| `BASE_URL` | Base URL embedded in generated QR codes | `https://ranjithbrs.pythonanywhere.com` |
-| `SECRET_KEY` | Flask session encryption key | Auto-generated random 32-byte hex token |
-| `FLASK_DEBUG` | Enable live debugger and hot reload | `false` |
-
----
-
 ## 🌐 Deploying to PythonAnywhere
 
-1. **Clone repository on PythonAnywhere bash console:**
+1. **Clone repository on PythonAnywhere:**
    ```bash
    git clone https://github.com/ranjithbrs/CertValid.git
    cd CertValid
    pip install --user -r requirements.txt
    ```
 
-2. **Initialize SQLite Database:**
+2. **Initialize Database:**
    ```bash
    python -c "import db; db.init_db()"
    ```
 
-3. **Configure WSGI Configuration File (`/var/www/<username>_pythonanywhere_com_wsgi.py`):**
-   ```python
-   import sys, os
-   project_home = '/home/<your-username>/CertValid'
-   if project_home not in sys.path:
-       sys.path.insert(0, project_home)
-   from app import app as application
-   ```
-
-4. **Map Static Files:**
-   - URL: `/static/`
-   - Directory: `/home/<your-username>/CertValid/static/`
-
-5. **Click Reload Web App.**
-
----
-
-## 📁 Project Structure
-
-```text
-CertValid/
-├── app.py              # Flask app, HTTP routes, dynamic Pillow image generator & error handlers
-├── db.py               # SQLite database layer, WAL mode, SHA-256 indexing & PBKDF2 auth
-├── database.db         # SQLite database file (auto-initialized on startup)
-├── wsgi.py             # WSGI entrypoint for production hosting
-├── requirements.txt    # Python package dependencies
-├── README.md           # Comprehensive project documentation
-├── .gitignore          # Git exclusion rules
-├── static/
-│   ├── style.css       # Custom Glassmorphism CSS design system
-│   ├── uploads/        # Temporary uploaded certificate files (auto-cleaned)
-│   └── certs/          # Generated certificate PNG images
-└── templates/
-    ├── upload.html     # Public verification portal (upload & ID search)
-    ├── result.html     # Verification report & cryptographic audit view
-    ├── admin.html      # Admin dashboard, certificate issuer & audit logs
-    └── error.html      # Styled 404 / 500 error pages
-```
+3. **Reload Web App in PythonAnywhere Web Tab!**
 
 ---
 
 ## 🛠️ Technology Stack
 
-- **Backend:** Python 3, Flask, WSGI
-- **Database:** SQLite3 (WAL mode, indexed file hashes)
-- **Cryptography & Security:** SHA-256 hashing, PBKDF2-HMAC-SHA256 password security, `hmac.compare_digest`
-- **Image Generation:** Pillow (PIL), `qrcode`, NumPy
-- **Frontend:** HTML5, Modern CSS3 (Glassmorphism design system)
-- **Deployment:** PythonAnywhere PaaS
+- **Backend:** Python 3, Flask, SQLAlchemy, WSGI
+- **Database:** SQLite3 (WAL mode) / PostgreSQL / MySQL
+- **Cryptography:** Ed25519 Elliptic Curve Signatures, SHA-256, PBKDF2-HMAC-SHA256
+- **Image & Document Processing:** Pillow, `imagehash`, `pypdf`, `pytesseract`, `qrcode`
+- **Cloud & Infrastructure:** AWS S3 (`boto3`), Flask-Limiter
+- **Frontend:** HTML5, Modern Vanilla CSS3 (Glassmorphism design system)
 
 ---
 
@@ -242,4 +177,4 @@ CertValid/
 
 ## 📄 License
 
-This project is open-source and available under the [MIT License](LICENSE).
+This project is open-source under the [MIT License](LICENSE).
