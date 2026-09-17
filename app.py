@@ -769,6 +769,7 @@ def admin_dashboard():
         'alert_email': db.get_setting('alert_email', ''),
     }
     merkle_meta = merkle.build_merkle_tree(certs)
+    analytics = db.get_verification_analytics(days=30)
     return render_template('admin.html', logged_in=True,
                            certs=certs, logs=logs, stats=stats,
                            admin_role=admin_role, totp_status=totp_status,
@@ -776,6 +777,7 @@ def admin_dashboard():
                            current_theme=current_theme,
                            notification_settings=notification_settings,
                            merkle_meta=merkle_meta,
+                           analytics=analytics,
                            active_tab='overview')
 
 
@@ -1277,6 +1279,30 @@ def api_health():
         'status': 'healthy',
         'system': 'CertValid Enterprise API v1',
         'timestamp': datetime.now().isoformat(sep=' ', timespec='seconds')
+    }), 200
+
+
+@app.route('/api/v1/analytics', methods=['GET'])
+@limiter.limit("60 per minute")
+def api_get_analytics():
+    """Return JSON verification analytics & metrics over time."""
+    api_key_header = request.headers.get('X-API-Key')
+    is_admin = session.get('admin_logged_in')
+    if not is_admin:
+        if not api_key_header or not db.verify_api_key(api_key_header):
+            return jsonify({'error': 'Unauthorized', 'message': 'Valid X-API-Key header or admin session required.'}), 401
+
+    try:
+        days = int(request.args.get('days', 30))
+        days = max(1, min(days, 365))
+    except (ValueError, TypeError):
+        days = 30
+
+    analytics_data = db.get_verification_analytics(days=days)
+    return jsonify({
+        'success': True,
+        'days': days,
+        'analytics': analytics_data
     }), 200
 
 

@@ -5,6 +5,14 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Admin Dashboard — CertValid</title>
   <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+  <style>
+    @media (max-width: 900px) {
+      .analytics-grid-row1, .analytics-grid-row2 {
+        grid-template-columns: 1fr !important;
+      }
+    }
+  </style>
 </head>
 <body>
 
@@ -142,6 +150,7 @@
     <!-- Admin Tab Nav -->
     <div class="admin-tabs">
       <button class="admin-tab active" id="tab-overview-btn"  onclick="showTab('overview')">📊 Overview</button>
+      <button class="admin-tab" id="tab-analytics-btn" onclick="showTab('analytics')">📈 Analytics</button>
       {% if admin_role != 'auditor' %}
         <button class="admin-tab" id="tab-issue-btn"    onclick="showTab('issue')">➕ Issue Certificate</button>
         <button class="admin-tab" id="tab-bulk-btn"     onclick="showTab('bulk')">📦 Bulk Issue</button>
@@ -179,6 +188,124 @@
             <div>🔏 Digital Signatures: <strong style="color:var(--text);">Ed25519 Asymmetric</strong></div>
             <div>🗄️ Database Engine: <strong style="color:var(--text);">SQLAlchemy Abstraction</strong></div>
             <div>🛡️ Security Features: <strong style="color:var(--text);">Flask-Limiter, Security Headers, PBKDF2</strong></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── Analytics Tab ── -->
+    <div class="admin-tab-pane" id="tab-analytics" style="display:none;">
+      <!-- Header & Time Range Filter -->
+      <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:1rem; margin-bottom:1.5rem;">
+        <div>
+          <h3 style="font-size:1.3rem; margin-bottom:.25rem; display:flex; align-items:center; gap:.5rem;">
+            📈 Verification Analytics & Visual Insights
+          </h3>
+          <p style="color:var(--text-muted); font-size:.85rem; margin:0;">
+            Real-time telemetry, verification volume trends, channel distribution, and credential performance.
+          </p>
+        </div>
+        <div style="display:flex; gap:.5rem; background:rgba(255,255,255,0.05); padding:4px; border-radius:8px; border:1px solid var(--border-color);">
+          <button class="btn btn-ghost btn-sm" id="range-7"  onclick="updateAnalyticsRange(7)">7 Days</button>
+          <button class="btn btn-ghost btn-sm" id="range-14" onclick="updateAnalyticsRange(14)">14 Days</button>
+          <button class="btn btn-ghost btn-sm active-range" id="range-30" style="background:var(--primary); color:#fff;" onclick="updateAnalyticsRange(30)">30 Days</button>
+          <button class="btn btn-ghost btn-sm" id="range-90" onclick="updateAnalyticsRange(90)">90 Days</button>
+        </div>
+      </div>
+
+      <!-- KPI Summary Cards -->
+      <div class="stats-grid" style="margin-bottom:1.5rem;">
+        <div class="stat-card" style="padding:1.1rem;">
+          <div class="stat-value" id="kpi-total">{{ analytics.summary.total_verifications }}</div>
+          <div class="stat-label">Total Verifications</div>
+        </div>
+        <div class="stat-card" style="padding:1.1rem;">
+          <div class="stat-value" id="kpi-rate" style="color:var(--emerald-light);">{{ analytics.summary.authentic_rate }}%</div>
+          <div class="stat-label">Authentic Pass Rate</div>
+        </div>
+        <div class="stat-card" style="padding:1.1rem;">
+          <div class="stat-value" id="kpi-failed" style="color:var(--red-light);">{{ analytics.summary.failed_count }}</div>
+          <div class="stat-label">Failed / Tampered</div>
+        </div>
+        <div class="stat-card" style="padding:1.1rem;">
+          <div class="stat-value" id="kpi-peak" style="font-size:1.15rem; color:var(--amber-light); text-overflow:ellipsis; overflow:hidden; white-space:nowrap;">{{ analytics.summary.peak_day }}</div>
+          <div class="stat-label">Peak Traffic Date</div>
+        </div>
+        <div class="stat-card" style="padding:1.1rem;">
+          <div class="stat-value" id="kpi-channel" style="font-size:1.05rem; color:var(--indigo-light); text-overflow:ellipsis; overflow:hidden; white-space:nowrap;">{{ analytics.summary.most_popular_method }}</div>
+          <div class="stat-label">Top Verification Channel</div>
+        </div>
+      </div>
+
+      <!-- Main Charts Row 1 -->
+      <div style="display:grid; grid-template-columns: 2fr 1fr; gap:1.5rem; margin-bottom:1.5rem;" class="analytics-grid-row1">
+        <!-- Verification Trends Line Chart -->
+        <div class="card" style="padding:1.25rem;">
+          <h4 style="font-size:.95rem; margin-bottom:1rem; display:flex; justify-content:space-between; align-items:center;">
+            <span>📅 Verification Volume Trends Over Time</span>
+            <span style="font-size:.75rem; color:var(--text-muted); font-weight:normal;">Daily Activity</span>
+          </h4>
+          <div style="height:260px; position:relative;">
+            <canvas id="timelineChart"></canvas>
+          </div>
+        </div>
+
+        <!-- Outcome Doughnut Chart -->
+        <div class="card" style="padding:1.25rem;">
+          <h4 style="font-size:.95rem; margin-bottom:1rem;">🎯 Outcome Breakdown</h4>
+          <div style="height:260px; position:relative;">
+            <canvas id="statusChart"></canvas>
+          </div>
+        </div>
+      </div>
+
+      <!-- Main Charts Row 2 -->
+      <div style="display:grid; grid-template-columns: 1fr 1fr; gap:1.5rem;" class="analytics-grid-row2">
+        <!-- Channels & Ingestion Bar Chart -->
+        <div class="card" style="padding:1.25rem;">
+          <h4 style="font-size:.95rem; margin-bottom:1rem;">📡 Verification Channels & Extraction Methods</h4>
+          <div style="height:250px; position:relative;">
+            <canvas id="methodsChart"></canvas>
+          </div>
+        </div>
+
+        <!-- Top Verified Credentials Leaderboard -->
+        <div class="card" style="padding:1.25rem;">
+          <h4 style="font-size:.95rem; margin-bottom:1rem; display:flex; justify-content:space-between; align-items:center;">
+            <span>🏆 Most Verified Credentials</span>
+            <span style="font-size:.75rem; color:var(--text-muted); font-weight:normal;">Top 5</span>
+          </h4>
+          <div class="table-wrapper" style="max-height:250px; overflow-y:auto;">
+            <table style="width:100%; font-size:.82rem;">
+              <thead>
+                <tr>
+                  <th>Cert ID</th>
+                  <th>Recipient</th>
+                  <th style="text-align:center;">Checks</th>
+                  <th style="text-align:right;">Authentic %</th>
+                </tr>
+              </thead>
+              <tbody id="top-certs-tbody">
+                {% for tc in analytics.top_certs %}
+                <tr>
+                  <td><code style="color:var(--accent-gold); font-size:.8rem;">{{ tc.cert_id }}</code></td>
+                  <td><strong>{{ tc.student_name }}</strong><br><small style="color:var(--text-muted);">{{ tc.course_name }}</small></td>
+                  <td style="text-align:center;"><span class="badge badge-active">{{ tc.total }}</span></td>
+                  <td style="text-align:right; font-weight:bold; color:var(--emerald-light);">
+                    {% if tc.total > 0 %}
+                      {{ ((tc.authentic / tc.total) * 100) | round(1) }}%
+                    {% else %}
+                      100%
+                    {% endif %}
+                  </td>
+                </tr>
+                {% else %}
+                <tr>
+                  <td colspan="4" style="text-align:center; color:var(--text-muted); padding:1.5rem;">No credential verifications recorded yet.</td>
+                </tr>
+                {% endfor %}
+              </tbody>
+            </table>
           </div>
         </div>
       </div>
@@ -818,6 +945,186 @@
 {% endif %}
 
 <script>
+  const initialAnalytics = {% if analytics %}{{ analytics | tojson }}{% else %}null{% endif %};
+  let timelineChartInstance = null;
+  let statusChartInstance = null;
+  let methodsChartInstance = null;
+
+  function initAnalyticsCharts(data) {
+    if (typeof Chart === 'undefined' || !data) return;
+
+    const textColor = '#94a3b8';
+    const gridColor = 'rgba(255, 255, 255, 0.07)';
+
+    // 1. Timeline Chart
+    const dates = (data.timeline || []).map(t => t.date.slice(5)); // MM-DD
+    const authData = (data.timeline || []).map(t => t.authentic);
+    const failData = (data.timeline || []).map(t => t.failed);
+    const revData  = (data.timeline || []).map(t => t.revoked + (t.expired || 0));
+
+    const ctxTimeline = document.getElementById('timelineChart');
+    if (ctxTimeline) {
+      if (timelineChartInstance) timelineChartInstance.destroy();
+      timelineChartInstance = new Chart(ctxTimeline, {
+        type: 'line',
+        data: {
+          labels: dates,
+          datasets: [
+            {
+              label: 'Authentic',
+              data: authData,
+              borderColor: '#10b981',
+              backgroundColor: 'rgba(16, 185, 129, 0.15)',
+              tension: 0.35,
+              fill: true,
+              borderWidth: 2,
+              pointRadius: dates.length > 30 ? 0 : 3
+            },
+            {
+              label: 'Failed / Tampered',
+              data: failData,
+              borderColor: '#ef4444',
+              backgroundColor: 'rgba(239, 68, 68, 0.1)',
+              tension: 0.35,
+              fill: true,
+              borderWidth: 2,
+              pointRadius: dates.length > 30 ? 0 : 3
+            },
+            {
+              label: 'Revoked / Expired',
+              data: revData,
+              borderColor: '#f59e0b',
+              backgroundColor: 'rgba(245, 158, 11, 0.1)',
+              tension: 0.35,
+              fill: true,
+              borderWidth: 2,
+              pointRadius: dates.length > 30 ? 0 : 3
+            }
+          ]
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          plugins: {
+            legend: { labels: { color: textColor, font: { size: 11 } } },
+            tooltip: { mode: 'index', intersect: false }
+          },
+          scales: {
+            x: { grid: { color: gridColor }, ticks: { color: textColor, font: { size: 10 } } },
+            y: { grid: { color: gridColor }, ticks: { color: textColor, stepSize: 1, beginAtZero: true } }
+          }
+        }
+      });
+    }
+
+    // 2. Status Outcome Doughnut Chart
+    const ctxStatus = document.getElementById('statusChart');
+    if (ctxStatus) {
+      if (statusChartInstance) statusChartInstance.destroy();
+      const sc = data.status_counts || {};
+      statusChartInstance = new Chart(ctxStatus, {
+        type: 'doughnut',
+        data: {
+          labels: ['Authentic', 'Invalid', 'Tampered', 'Revoked', 'Expired'],
+          datasets: [{
+            data: [
+              sc['AUTHENTIC'] || 0,
+              sc['INVALID'] || 0,
+              sc['TAMPERED'] || 0,
+              sc['REVOKED'] || 0,
+              sc['EXPIRED'] || 0
+            ],
+            backgroundColor: ['#10b981', '#ef4444', '#f43f5e', '#f59e0b', '#8b5cf6'],
+            borderWidth: 2,
+            borderColor: '#0f172a'
+          }]
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          plugins: {
+            legend: { position: 'bottom', labels: { color: textColor, font: { size: 10 } } }
+          }
+        }
+      });
+    }
+
+    // 3. Methods & Channels Bar Chart
+    const ctxMethods = document.getElementById('methodsChart');
+    if (ctxMethods) {
+      if (methodsChartInstance) methodsChartInstance.destroy();
+      const mc = data.method_counts || {};
+      const methodLabels = Object.keys(mc);
+      const methodValues = Object.values(mc);
+      methodsChartInstance = new Chart(ctxMethods, {
+        type: 'bar',
+        data: {
+          labels: methodLabels,
+          datasets: [{
+            label: 'Verifications',
+            data: methodValues,
+            backgroundColor: ['#6366f1', '#38bdf8', '#10b981', '#f59e0b', '#ec4899', '#a855f7'],
+            borderRadius: 6
+          }]
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          plugins: { legend: { display: false } },
+          scales: {
+            x: { grid: { display: false }, ticks: { color: textColor, font: { size: 9 } } },
+            y: { grid: { color: gridColor }, ticks: { color: textColor, stepSize: 1, beginAtZero: true } }
+          }
+        }
+      });
+    }
+  }
+
+  function updateAnalyticsRange(days) {
+    document.querySelectorAll('[id^="range-"]').forEach(btn => {
+      btn.style.background = 'transparent';
+      btn.style.color = 'var(--text-muted)';
+    });
+    const activeBtn = document.getElementById('range-' + days);
+    if (activeBtn) {
+      activeBtn.style.background = 'var(--primary)';
+      activeBtn.style.color = '#fff';
+    }
+
+    fetch(`/api/v1/analytics?days=${days}`)
+      .then(res => res.json())
+      .then(json => {
+        if (json.success && json.analytics) {
+          const a = json.analytics;
+          document.getElementById('kpi-total').textContent = a.summary.total_verifications;
+          document.getElementById('kpi-rate').textContent = a.summary.authentic_rate + '%';
+          document.getElementById('kpi-failed').textContent = a.summary.failed_count;
+          document.getElementById('kpi-peak').textContent = a.summary.peak_day;
+          document.getElementById('kpi-channel').textContent = a.summary.most_popular_method;
+
+          initAnalyticsCharts(a);
+
+          const tbody = document.getElementById('top-certs-tbody');
+          if (tbody) {
+            if (a.top_certs && a.top_certs.length > 0) {
+              tbody.innerHTML = a.top_certs.map(tc => {
+                const pct = tc.total > 0 ? ((tc.authentic / tc.total) * 100).toFixed(1) : '100.0';
+                return `<tr>
+                  <td><code style="color:var(--accent-gold); font-size:.8rem;">${tc.cert_id}</code></td>
+                  <td><strong>${tc.student_name}</strong><br><small style="color:var(--text-muted);">${tc.course_name}</small></td>
+                  <td style="text-align:center;"><span class="badge badge-active">${tc.total}</span></td>
+                  <td style="text-align:right; font-weight:bold; color:var(--emerald-light);">${pct}%</td>
+                </tr>`;
+              }).join('');
+            } else {
+              tbody.innerHTML = '<tr><td colspan="4" style="text-align:center; color:var(--text-muted); padding:1.5rem;">No credential verifications recorded yet.</td></tr>';
+            }
+          }
+        }
+      })
+      .catch(err => console.error('Failed to load analytics range:', err));
+  }
+
   function showTab(tabName) {
     document.querySelectorAll('.admin-tab-pane').forEach(p => p.style.display = 'none');
     document.querySelectorAll('.admin-tab').forEach(b => b.classList.remove('active'));
@@ -825,6 +1132,18 @@
     const btn  = document.getElementById('tab-' + tabName + '-btn');
     if (pane) pane.style.display = 'block';
     if (btn)  btn.classList.add('active');
+
+    if (tabName === 'analytics') {
+      setTimeout(() => {
+        if (!timelineChartInstance && typeof Chart !== 'undefined' && initialAnalytics) {
+          initAnalyticsCharts(initialAnalytics);
+        } else if (timelineChartInstance) {
+          timelineChartInstance.resize();
+          if (statusChartInstance) statusChartInstance.resize();
+          if (methodsChartInstance) methodsChartInstance.resize();
+        }
+      }, 50);
+    }
   }
 
   (function() {

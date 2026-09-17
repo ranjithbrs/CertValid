@@ -309,6 +309,30 @@ def init_db():
                   s['issue_date'], s['issuer_name'], s['file_hash'],
                   sig, s['status'], now))
 
+    # Seed sample verification logs if empty
+    try:
+        log_count = c.execute('SELECT COUNT(*) FROM verification_logs').fetchone()[0]
+        if log_count == 0:
+            from datetime import timedelta
+            sample_logs = [
+                ('CERT-2024-001', 'cert_001.png', samples[0]['file_hash'], 'AUTHENTIC', 'Exact SHA-256 hash match', 6, '192.168.1.10'),
+                ('CERT-2024-001', None, None, 'AUTHENTIC', 'Direct ID verification: CERT-2024-001', 5, '10.0.0.12'),
+                ('CERT-2024-002', 'cert_rahul.jpg', samples[1]['file_hash'], 'AUTHENTIC', 'pHash visual match (distance: 2, similarity: 96.9%)', 4, '172.16.0.4'),
+                ('CERT-2024-002', None, None, 'AUTHENTIC', 'QR scan: certificate verified.', 3, '192.168.1.25'),
+                ('CERT-2023-099', None, None, 'REVOKED', 'Direct ID verification: Certificate REVOKED.', 2, '10.0.0.8'),
+                ('UNKNOWN-123', 'fake_cert.png', 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855', 'INVALID', 'No matching certificate found by SHA-256 or pHash.', 1, '203.0.113.42'),
+                ('CERT-2024-001', None, None, 'AUTHENTIC', 'API: Certificate verified', 0, '198.51.100.7'),
+            ]
+            for cid, fname, fhash, status, reason, days_ago, ip in sample_logs:
+                v_time = (datetime.now() - timedelta(days=days_ago, hours=3)).strftime('%Y-%m-%d %H:%M:%S')
+                c.execute('''
+                    INSERT INTO verification_logs
+                    (cert_id, file_name, computed_hash, status, reason, verified_at, ip_address)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                ''', (cid, fname, fhash, status, reason, v_time, ip))
+    except Exception:
+        pass
+
     conn.commit()
     conn.close()
 
@@ -682,6 +706,144 @@ def get_stats():
         'authentic_verifications': log_row['authentic_verifications']  or 0,
         'failed_verifications':    log_row['failed_verifications']     or 0,
         'revoked_verifications':   log_row['revoked_verifications']    or 0,
+    }
+
+
+def get_verification_analytics(days: int = 30) -> dict:
+    """
+    Compute comprehensive verification metrics and time-series analytics over the last `days` days.
+    Returns:
+      - days: int
+      - timeline: list of {'date': 'YYYY-MM-DD', 'authentic': N, 'failed': N, 'revoked': N, 'expired': N, 'total': N}
+      - status_counts: dict of outcome counts
+      - method_counts: dict of method/channel counts
+      - top_certs: list of top 5 verified certificates with recipient names and counts
+      - summary: dict of KPI totals, success rates, and peak dates
+    """
+    from datetime import datetime, timedelta
+    cutoff = (datetime.now() - timedelta(days=days)).strftime('%Y-%m-%d 00:00:00')
+    conn = get_db()
+
+    rows = conn.execute('''
+        SELECT id, cert_id, status, reason, verified_at, ip_address
+        FROM verification_logs
+        WHERE verified_at >= ?
+        ORDER BY verified_at ASC
+    ''', (cutoff,)).fetchall()
+
+    date_map = {}
+    for i in range(days - 1, -1, -1):
+        d_str = (datetime.now() - timedelta(days=i)).strftime('%Y-%m-%d')
+        date_map[d_str] = {
+            'date': d_str,
+            'authentic': 0,
+            'failed': 0,
+            'revoked': 0,
+            'expired': 0,
+            'total': 0
+        }
+
+    status_counts = {'AUTHENTIC': 0, 'INVALID': 0, 'TAMPERED': 0, 'REVOKED': 0, 'EXPIRED': 0}
+    method_counts = {
+        'SHA-256 Hash': 0,
+        'pHash Visual': 0,
+        'OCR Extraction': 0,
+        'QR Scan': 0,
+        'Direct ID Lookup': 0,
+        'REST API': 0
+    }
+    cert_counts = {}
+
+    for r in rows:
+        row_dict = dict(r)
+        v_at = row_dict.get('verified_at', '')
+        date_part = v_at.split(' ')[0] if ' ' in v_at else v_at[:10]
+        status = (row_dict.get('status') or 'INVALID').upper()
+        reason = (row_dict.get('reason') or '').lower()
+        cert_id = row_dict.get('cert_id')
+
+        if date_part in date_map:
+            date_map[date_part]['total'] += 1
+            if status == 'AUTHENTIC':
+                date_map[date_part]['authentic'] += 1
+            elif status in ('INVALID', 'TAMPERED'):
+                date_map[date_part]['failed'] += 1
+            elif status == 'REVOKED':
+                date_map[date_part]['revoked'] += 1
+            elif status == 'EXPIRED':
+                date_map[date_part]['expired'] += 1
+
+        if status in status_counts:
+            status_counts[status] += 1
+        else:
+            status_counts['INVALID'] += 1
+
+        if 'phash' in reason or 'visual' in reason:
+            method_counts['pHash Visual'] += 1
+        elif 'ocr' in reason:
+            method_counts['OCR Extraction'] += 1
+        elif 'qr' in reason:
+            method_counts['QR Scan'] += 1
+        elif 'api' in reason:
+            method_counts['REST API'] += 1
+        elif 'sha-256' in reason or 'file_hash' in reason or 'exact' in reason or 'hash match' in reason:
+            method_counts['SHA-256 Hash'] += 1
+        else:
+            method_counts['Direct ID Lookup'] += 1
+
+        if cert_id:
+            if cert_id not in cert_counts:
+                cert_counts[cert_id] = {'total': 0, 'authentic': 0}
+            cert_counts[cert_id]['total'] += 1
+            if status == 'AUTHENTIC':
+                cert_counts[cert_id]['authentic'] += 1
+
+    top_certs_list = []
+    sorted_cert_ids = sorted(cert_counts.keys(), key=lambda k: cert_counts[k]['total'], reverse=True)[:5]
+    for cid in sorted_cert_ids:
+        cert_row = conn.execute('SELECT student_name, course_name FROM certificates WHERE cert_id = ?', (cid,)).fetchone()
+        s_name = cert_row['student_name'] if cert_row else 'Unknown'
+        c_name = cert_row['course_name'] if cert_row else ''
+        top_certs_list.append({
+            'cert_id': cid,
+            'student_name': s_name,
+            'course_name': c_name,
+            'total': cert_counts[cid]['total'],
+            'authentic': cert_counts[cid]['authentic']
+        })
+
+    conn.close()
+
+    total_in_range = len(rows)
+    authentic_total = status_counts.get('AUTHENTIC', 0)
+    auth_rate = round((authentic_total / total_in_range * 100), 1) if total_in_range > 0 else 100.0
+
+    peak_day = None
+    peak_count = 0
+    for d, info in date_map.items():
+        if info['total'] > peak_count:
+            peak_count = info['total']
+            peak_day = d
+
+    most_popular_method = max(method_counts.items(), key=lambda x: x[1])[0] if any(method_counts.values()) else 'Direct ID Lookup'
+
+    return {
+        'days': days,
+        'timeline': list(date_map.values()),
+        'status_counts': status_counts,
+        'method_counts': method_counts,
+        'top_certs': top_certs_list,
+        'summary': {
+            'total_verifications': total_in_range,
+            'authentic_count': authentic_total,
+            'failed_count': status_counts.get('INVALID', 0) + status_counts.get('TAMPERED', 0),
+            'revoked_count': status_counts.get('REVOKED', 0),
+            'expired_count': status_counts.get('EXPIRED', 0),
+            'authentic_rate': auth_rate,
+            'peak_day': peak_day or 'N/A',
+            'peak_count': peak_count,
+            'most_popular_method': most_popular_method
+        }
     }
 
 
