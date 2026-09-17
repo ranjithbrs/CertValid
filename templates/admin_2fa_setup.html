@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Setup Two-Factor Authentication — CertValid</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+
+<nav class="navbar">
+  <div class="navbar-brand">
+    <div class="logo-icon">🛡️</div>
+    CertValid Admin
+  </div>
+  <div class="navbar-links">
+    <a href="{{ url_for('admin_dashboard') }}">← Back to Dashboard</a>
+  </div>
+</nav>
+
+<div class="page-wrapper" style="max-width:640px; margin:2rem auto;">
+  <div class="container">
+    <div class="card fade-in-up">
+      <div style="text-align:center; margin-bottom:1.5rem;">
+        <div style="font-size:2.5rem; margin-bottom:.5rem;">📱</div>
+        <h1 style="font-size:1.5rem;">Setup Two-Factor Authentication</h1>
+        <p style="color:var(--text-muted); font-size:.9rem; margin-top:.25rem;">
+          Scan the QR code below using Google Authenticator, Authy, or Microsoft Authenticator.
+        </p>
+      </div>
+
+      {% with messages = get_flashed_messages(with_categories=true) %}
+        {% if messages %}
+          <ul class="flash-list">
+            {% for category, message in messages %}
+              <li class="flash flash-{{ category }}">
+                {% if category == 'success' %}✅{% elif category == 'error' %}❌{% else %}⚠️{% endif %}
+                {{ message }}
+              </li>
+            {% endfor %}
+          </ul>
+        {% endif %}
+      {% endwith %}
+
+      <div style="text-align:center; background:var(--bg-card); padding:1.5rem; border-radius:12px; border:1px solid var(--border-color); margin-bottom:1.5rem;">
+        <img src="data:image/png;base64,{{ qr_b64 }}" alt="2FA QR Code" style="width:200px; height:200px; border-radius:8px; border:2px solid var(--accent-gold);">
+        <p style="margin-top:1rem; font-size:.85rem; color:var(--text-muted);">
+          Manual Entry Secret Key:<br>
+          <code style="font-size:1.1rem; color:var(--accent-gold); letter-spacing:2px; font-weight:bold; background:rgba(0,0,0,0.3); padding:4px 10px; border-radius:4px; display:inline-block; margin-top:4px;">
+            {{ secret }}
+          </code>
+        </p>
+      </div>
+
+      <form method="POST" action="{{ url_for('admin_2fa_setup') }}">
+        <input type="hidden" name="secret" value="{{ secret }}">
+        <div class="form-group">
+          <label class="form-label" for="confirm_code" style="text-align:center; display:block;">Enter 6-Digit Verification Code to Confirm</label>
+          <input type="text" id="confirm_code" name="confirm_code" class="form-control"
+                 placeholder="123456" required autocomplete="off" maxlength="6"
+                 style="font-size:1.5rem; letter-spacing:6px; text-align:center; font-family:monospace;"
+                 autofocus>
+        </div>
+        <button type="submit" class="btn btn-primary btn-full btn-lg" style="margin-top:.5rem;">
+          🔐 Enable 2FA Security
+        </button>
+      </form>
+
+      <p style="text-align:center; margin-top:1.25rem; font-size:.85rem;">
+        <a href="{{ url_for('admin_dashboard') }}" style="color:var(--text-muted); text-decoration:underline;">
+          Cancel and Return
+        </a>
+      </p>
+    </div>
+  </div>
+</div>
+
+</body>
+</html>

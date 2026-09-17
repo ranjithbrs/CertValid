@@ -459,10 +459,16 @@ def admin():
         admin_user = db.verify_admin(username, password)
         if admin_user:
             session.permanent = True
-            session['admin_logged_in'] = True
-            session['admin_user'] = admin_user['username']
-            session['admin_role'] = admin_user['role']
-            return redirect(url_for('admin_dashboard'))
+            if admin_user.get('totp_enabled'):
+                session['pre_auth_user']   = admin_user['username']
+                session['pre_auth_role']   = admin_user['role']
+                session['pre_auth_secret'] = admin_user['totp_secret']
+                return redirect(url_for('admin_2fa'))
+            else:
+                session['admin_logged_in'] = True
+                session['admin_user'] = admin_user['username']
+                session['admin_role'] = admin_user['role']
+                return redirect(url_for('admin_dashboard'))
         flash('Invalid username or password.', 'error')
         return render_template('admin.html', logged_in=False)
 
@@ -472,6 +478,63 @@ def admin():
     return render_template('admin.html', logged_in=False)
 
 
+@app.route('/admin/2fa', methods=['GET', 'POST'])
+def admin_2fa():
+    """Verify 6-digit OTP code during 2-step login."""
+    if session.get('admin_logged_in'):
+        return redirect(url_for('admin_dashboard'))
+
+    pre_user   = session.get('pre_auth_user')
+    pre_secret = session.get('pre_auth_secret')
+    if not pre_user or not pre_secret:
+        return redirect(url_for('admin'))
+
+    if request.method == 'POST':
+        totp_code = request.form.get('totp_code', '').strip()
+        if db.verify_totp_code(pre_secret, totp_code):
+            session['admin_logged_in'] = True
+            session['admin_user'] = session.pop('pre_auth_user')
+            session['admin_role'] = session.pop('pre_auth_role')
+            session.pop('pre_auth_secret', None)
+            flash('Two-Factor Authentication verified successfully!', 'success')
+            return redirect(url_for('admin_dashboard'))
+        flash('Invalid 6-digit verification code. Please check your authenticator app.', 'error')
+
+    return render_template('admin_2fa.html')
+
+
+@app.route('/admin/2fa/setup', methods=['GET', 'POST'])
+@login_required
+def admin_2fa_setup():
+    """Generate QR code and secret for setting up 2FA."""
+    username = session.get('admin_user', 'admin')
+
+    if request.method == 'POST':
+        secret       = request.form.get('secret', '')
+        confirm_code = request.form.get('confirm_code', '').strip()
+        if db.verify_totp_code(secret, confirm_code):
+            db.enable_admin_2fa(username, secret)
+            flash('Two-Factor Authentication (2FA) enabled successfully!', 'success')
+            return redirect(url_for('admin_dashboard') + '?tab=security')
+        flash('Invalid verification code. Please scan the QR code and try again.', 'error')
+        return redirect(url_for('admin_2fa_setup'))
+
+    secret  = db.generate_totp_secret()
+    uri     = db.get_totp_uri(username, secret)
+    qr_b64  = db.generate_qr_code_b64(uri)
+    return render_template('admin_2fa_setup.html', secret=secret, qr_b64=qr_b64)
+
+
+@app.route('/admin/2fa/disable', methods=['POST'])
+@login_required
+def admin_2fa_disable():
+    """Disable 2FA for the current admin user."""
+    username = session.get('admin_user', 'admin')
+    db.disable_admin_2fa(username)
+    flash('Two-Factor Authentication has been disabled.', 'warning')
+    return redirect(url_for('admin_dashboard') + '?tab=security')
+
+
 @app.route('/admin/dashboard')
 @login_required
 def admin_dashboard():
@@ -479,9 +542,12 @@ def admin_dashboard():
     logs  = db.get_all_logs(50)
     stats = db.get_stats()
     admin_role = session.get('admin_role', 'superadmin')
+    username   = session.get('admin_user', 'admin')
+    totp_status = db.get_admin_2fa_status(username)
     return render_template('admin.html', logged_in=True,
                            certs=certs, logs=logs, stats=stats,
-                           admin_role=admin_role, active_tab='overview')
+                           admin_role=admin_role, totp_status=totp_status,
+                           active_tab='overview')
 
 
 @app.route('/admin/issue', methods=['POST'])

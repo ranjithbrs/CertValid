@@ -17,6 +17,7 @@ from PIL import Image
 import imagehash
 import pypdf
 import pytesseract
+import pyotp
 from cryptography.hazmat.primitives.asymmetric import ed25519
 from cryptography.hazmat.primitives import serialization
 import sqlalchemy
@@ -203,22 +204,28 @@ def init_db():
         )
     ''')
 
-    # Admin users table with RBAC role
+    # Admin users table with RBAC role & TOTP 2FA
     c.execute('''
         CREATE TABLE IF NOT EXISTS admin_users (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             username TEXT UNIQUE NOT NULL,
             password_hash TEXT NOT NULL,
-            role TEXT NOT NULL DEFAULT 'superadmin'
+            role TEXT NOT NULL DEFAULT 'superadmin',
+            totp_secret TEXT,
+            totp_enabled INTEGER NOT NULL DEFAULT 0
         )
     ''')
 
-    # Migration check for admin_users table role column
+    # Migration check for admin_users table role & TOTP 2FA columns
     try:
         admin_cols = [r['name'] if isinstance(r, dict) or hasattr(r, '__getitem__') else r[1]
                       for r in c.execute("PRAGMA table_info(admin_users)").fetchall()]
         if 'role' not in admin_cols:
             c.execute("ALTER TABLE admin_users ADD COLUMN role TEXT NOT NULL DEFAULT 'superadmin'")
+        if 'totp_secret' not in admin_cols:
+            c.execute("ALTER TABLE admin_users ADD COLUMN totp_secret TEXT")
+        if 'totp_enabled' not in admin_cols:
+            c.execute("ALTER TABLE admin_users ADD COLUMN totp_enabled INTEGER NOT NULL DEFAULT 0")
     except Exception:
         pass
 
@@ -543,7 +550,16 @@ def verify_admin(username, password):
     r_dict = dict(row)
     stored_hash = r_dict['password_hash']
     role = r_dict.get('role', 'superadmin')
-    user_dict = {'id': r_dict['id'], 'username': r_dict['username'], 'role': role}
+    totp_enabled = bool(r_dict.get('totp_enabled', 0))
+    totp_secret = r_dict.get('totp_secret')
+
+    user_dict = {
+        'id': r_dict['id'],
+        'username': r_dict['username'],
+        'role': role,
+        'totp_enabled': totp_enabled,
+        'totp_secret': totp_secret
+    }
 
     if _is_legacy_sha256(stored_hash):
         old_hash = hashlib.sha256(password.encode()).hexdigest()
@@ -564,3 +580,74 @@ def verify_admin(username, password):
         return user_dict
 
     return None
+
+
+# ─── TOTP Two-Factor Authentication (2FA) Helpers ───────────────────────────
+
+def generate_totp_secret() -> str:
+    """Generate a random Base32 secret key for TOTP 2FA."""
+    return pyotp.random_base32()
+
+
+def get_totp_uri(username: str, secret: str) -> str:
+    """Generate standard otpauth:// URI for authenticator QR codes."""
+    totp = pyotp.TOTP(secret)
+    return totp.provisioning_uri(name=username, issuer_name='CertValid')
+
+
+def generate_qr_code_b64(data_uri: str) -> str:
+    """Generate a Base64 encoded PNG string of a QR code from URI string."""
+    qr = qrcode.QRCode(version=1, box_size=5, border=2)
+    qr.add_data(data_uri)
+    qr.make(fit=True)
+    img = qr.make_image(fill_color='black', back_color='white')
+    buf = io.BytesIO()
+    img.save(buf, format='PNG')
+    return base64.b64encode(buf.getvalue()).decode('utf-8')
+
+
+def verify_totp_code(secret: str, code: str) -> bool:
+    """Verify a 6-digit TOTP code against a secret key with 30s window tolerance."""
+    if not secret or not code:
+        return False
+    try:
+        totp = pyotp.TOTP(secret)
+        return totp.verify(str(code).strip(), valid_window=1)
+    except Exception:
+        return False
+
+
+def enable_admin_2fa(username: str, secret: str):
+    """Enable 2FA for an admin user and store their secret."""
+    conn = get_db()
+    conn.execute(
+        'UPDATE admin_users SET totp_secret = ?, totp_enabled = 1 WHERE username = ?',
+        (secret, username)
+    )
+    conn.commit()
+    conn.close()
+
+
+def disable_admin_2fa(username: str):
+    """Disable 2FA for an admin user."""
+    conn = get_db()
+    conn.execute(
+        'UPDATE admin_users SET totp_secret = NULL, totp_enabled = 0 WHERE username = ?',
+        (username,)
+    )
+    conn.commit()
+    conn.close()
+
+
+def get_admin_2fa_status(username: str) -> dict:
+    """Get 2FA status and secret for an admin user."""
+    conn = get_db()
+    row = conn.execute(
+        'SELECT totp_secret, totp_enabled FROM admin_users WHERE username = ?', (username,)
+    ).fetchone()
+    conn.close()
+    if row:
+        r = dict(row)
+        return {'enabled': bool(r.get('totp_enabled')), 'secret': r.get('totp_secret')}
+    return {'enabled': False, 'secret': None}
+

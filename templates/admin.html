@@ -147,6 +147,7 @@
       {% endif %}
       <button class="admin-tab" id="tab-registry-btn" onclick="showTab('registry')">📋 Registry</button>
       <button class="admin-tab" id="tab-logs-btn"     onclick="showTab('logs')">📜 Audit Logs</button>
+      <button class="admin-tab" id="tab-security-btn" onclick="showTab('security')">🔐 Security (2FA)</button>
     </div>
 
     <!-- ── Overview Tab ── -->
@@ -335,6 +336,48 @@
           <p style="color:var(--text-muted);">No verification attempts logged yet.</p>
         </div>
       {% endif %}
+    </div>
+
+    <!-- ── Security Tab (2FA) ── -->
+    <div class="admin-tab-pane" id="tab-security" style="display:none;">
+      <div class="card" style="max-width:640px; margin:0 auto;">
+        <h3 style="margin-bottom:.5rem; font-size:1.1rem; display:flex; align-items:center; gap:.5rem;">
+          🔐 Two-Factor Authentication (2FA) Security
+        </h3>
+        <p style="color:var(--text-muted); font-size:.88rem; margin-bottom:1.5rem;">
+          Protect your admin account with TOTP 2FA. When enabled, signing in requires a 6-digit code from Google Authenticator, Authy, or Microsoft Authenticator.
+        </p>
+
+        {% if totp_status and totp_status.enabled %}
+          <div style="background:rgba(16,185,129,0.1); border:1px solid var(--emerald); padding:1.25rem; border-radius:8px; display:flex; align-items:center; justify-content:space-between; margin-bottom:1.5rem;">
+            <div style="display:flex; align-items:center; gap:.75rem;">
+              <span style="font-size:1.6rem;">🛡️</span>
+              <div>
+                <strong style="color:var(--emerald-light); font-size:.95rem;">2FA Security is Active</strong>
+                <p style="font-size:.8rem; color:var(--text-muted); margin:.2rem 0 0 0;">Your account is protected with 6-digit TOTP verification.</p>
+              </div>
+            </div>
+            <span class="badge badge-authentic">Active</span>
+          </div>
+
+          <form method="POST" action="{{ url_for('admin_2fa_disable') }}" onsubmit="return confirm('Are you sure you want to disable 2FA? Your account security level will be reduced.');">
+            <button type="submit" class="btn btn-danger btn-sm">❌ Disable 2FA</button>
+          </form>
+        {% else %}
+          <div style="background:rgba(239,68,68,0.1); border:1px solid var(--red); padding:1.25rem; border-radius:8px; display:flex; align-items:center; justify-content:space-between; margin-bottom:1.5rem;">
+            <div style="display:flex; align-items:center; gap:.75rem;">
+              <span style="font-size:1.6rem;">⚠️</span>
+              <div>
+                <strong style="color:var(--red-light); font-size:.95rem;">2FA is Currently Disabled</strong>
+                <p style="font-size:.8rem; color:var(--text-muted); margin:.2rem 0 0 0;">Enable 2FA to prevent unauthorized password-only access.</p>
+              </div>
+            </div>
+            <span class="badge badge-invalid">Disabled</span>
+          </div>
+
+          <a href="{{ url_for('admin_2fa_setup') }}" class="btn btn-primary">📱 Setup Two-Factor Authentication</a>
+        {% endif %}
+      </div>
     </div>
 
   </div><!-- /container -->
