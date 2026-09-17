@@ -12,6 +12,11 @@
         grid-template-columns: 1fr !important;
       }
     }
+    button:disabled {
+      opacity: 0.35 !important;
+      cursor: not-allowed !important;
+      pointer-events: none !important;
+    }
   </style>
 </head>
 <body>
@@ -389,12 +394,40 @@
 
     <!-- ── Registry Tab ── -->
     <div class="admin-tab-pane" id="tab-registry" style="display:none;">
-      <div class="section-header">
-        <span class="section-title">📋 Certificate Registry</span>
-        <span style="font-size:.85rem; color:var(--text-muted);">{{ certs|length }} certificates total</span>
+      <div class="section-header" style="flex-wrap:wrap; gap:1rem; align-items:center;">
+        <div>
+          <span class="section-title">📋 Certificate Registry</span>
+          <span style="font-size:.85rem; color:var(--text-muted); margin-left:.5rem;">{{ certs|length }} certificates total</span>
+        </div>
       </div>
 
       {% if certs %}
+      <!-- Registry Search & Filter Toolbar -->
+      <div style="background:var(--bg-card); border:1px solid var(--border-color); border-radius:8px; padding:.9rem 1.1rem; margin-bottom:1rem; display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:1rem;">
+        <div style="display:flex; gap:.75rem; align-items:center; flex-wrap:wrap; flex:1; min-width:280px;">
+          <input type="text" id="registry-search" class="form-control" placeholder="🔍 Search ID, recipient, course, issuer..." style="max-width:320px;" oninput="filterRegistry()">
+
+          <div style="display:flex; background:rgba(0,0,0,0.25); border:1px solid var(--border-color); border-radius:6px; padding:2px;">
+            <button type="button" class="btn btn-sm btn-primary" id="reg-filter-all" onclick="setRegistryStatusFilter('all')" style="padding:4px 10px; font-size:.8rem;">All</button>
+            <button type="button" class="btn btn-sm btn-ghost" id="reg-filter-active" onclick="setRegistryStatusFilter('active')" style="padding:4px 10px; font-size:.8rem;">Active</button>
+            <button type="button" class="btn btn-sm btn-ghost" id="reg-filter-revoked" onclick="setRegistryStatusFilter('revoked')" style="padding:4px 10px; font-size:.8rem;">Revoked</button>
+            <button type="button" class="btn btn-sm btn-ghost" id="reg-filter-expired" onclick="setRegistryStatusFilter('expired')" style="padding:4px 10px; font-size:.8rem;">Expired</button>
+          </div>
+        </div>
+
+        <div style="display:flex; gap:.75rem; align-items:center; flex-wrap:wrap;">
+          <label style="font-size:.82rem; color:var(--text-muted); display:flex; align-items:center; gap:.4rem;">
+            Per Page:
+            <select id="registry-page-size" class="form-control" style="width:auto; padding:3px 8px; font-size:.82rem;" onchange="changeRegistryPageSize(this.value)">
+              <option value="10" selected>10</option>
+              <option value="25">25</option>
+              <option value="50">50</option>
+              <option value="all">All</option>
+            </select>
+          </label>
+        </div>
+      </div>
+
       <div class="table-wrapper">
         <table>
           <thead>
@@ -409,11 +442,15 @@
               <th>Actions</th>
             </tr>
           </thead>
-          <tbody>
+          <tbody id="registry-tbody">
             {% for cert in certs %}
-            <tr>
+            <tr data-cert-id="{{ cert.cert_id | lower }}"
+                data-student="{{ cert.student_name | lower }}"
+                data-course="{{ cert.course_name | lower }}"
+                data-issuer="{{ cert.issuer_name | lower }}"
+                data-status="{% if cert.status == 'revoked' %}revoked{% elif cert.is_expired or cert.effective_status == 'expired' %}expired{% else %}active{% endif %}">
               <td><span class="cert-id-display">{{ cert.cert_id }}</span></td>
-              <td>{{ cert.student_name }}</td>
+              <td><strong>{{ cert.student_name }}</strong></td>
               <td style="color:var(--text-muted);">{{ cert.course_name }}</td>
               <td style="color:var(--text-muted); font-size:.82rem;">{{ cert.issuer_name }}</td>
               <td style="color:var(--text-muted);">{{ cert.issue_date }}</td>
@@ -457,8 +494,28 @@
               </td>
             </tr>
             {% endfor %}
+            <tr id="registry-no-match" style="display:none;">
+              <td colspan="8" style="text-align:center; padding:2.5rem; color:var(--text-muted);">
+                🔍 No certificates found matching your criteria.
+                <a href="javascript:void(0)" onclick="resetRegistryFilter()" style="color:var(--primary); margin-left:.5rem;">Clear Filters</a>
+              </td>
+            </tr>
           </tbody>
         </table>
+      </div>
+
+      <!-- Registry Pagination Navigation Footer -->
+      <div id="registry-pagination-wrap" style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:1rem; margin-top:1rem; padding:0 .25rem;">
+        <div id="registry-counter-text" style="font-size:.82rem; color:var(--text-muted);">
+          Showing 1–10 of {{ certs|length }} certificates
+        </div>
+        <div style="display:flex; gap:.35rem; align-items:center;">
+          <button type="button" class="btn btn-ghost btn-sm" id="reg-first-btn" onclick="goRegistryPage(1)">« First</button>
+          <button type="button" class="btn btn-ghost btn-sm" id="reg-prev-btn" onclick="goRegistryPage(regCurrentPage - 1)">‹ Prev</button>
+          <span id="reg-page-indicator" style="font-size:.82rem; font-weight:bold; padding:0 .5rem; color:var(--accent-gold);">Page 1 of 1</span>
+          <button type="button" class="btn btn-ghost btn-sm" id="reg-next-btn" onclick="goRegistryPage(regCurrentPage + 1)">Next ›</button>
+          <button type="button" class="btn btn-ghost btn-sm" id="reg-last-btn" onclick="goRegistryPage(regTotalPages)">Last »</button>
+        </div>
       </div>
       {% else %}
         <div class="card" style="text-align:center; padding:3rem;">
@@ -476,7 +533,7 @@
       <div class="section-header" style="flex-wrap:wrap; gap:1rem; align-items:center;">
         <div>
           <span class="section-title">📜 Verification Audit Logs</span>
-          <span style="font-size:.85rem; color:var(--text-muted); margin-left:.5rem;">Showing {{ logs|length }} entries</span>
+          <span style="font-size:.85rem; color:var(--text-muted); margin-left:.5rem;">{{ logs|length }} entries loaded</span>
         </div>
 
         <div style="display:flex; gap:.75rem; align-items:center; flex-wrap:wrap;">
@@ -495,6 +552,26 @@
       </div>
 
       {% if logs %}
+      <!-- Logs Live Search & Page Sizing Toolbar -->
+      <div style="background:var(--bg-card); border:1px solid var(--border-color); border-radius:8px; padding:.9rem 1.1rem; margin-bottom:1rem; display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:1rem;">
+        <div style="flex:1; min-width:260px;">
+          <input type="text" id="logs-search" class="form-control" placeholder="🔍 Instant search by ID, IP, filename, reason..." style="max-width:360px;" oninput="filterLogs()">
+        </div>
+
+        <div style="display:flex; gap:.75rem; align-items:center; flex-wrap:wrap;">
+          <label style="font-size:.82rem; color:var(--text-muted); display:flex; align-items:center; gap:.4rem;">
+            Per Page:
+            <select id="logs-page-size" class="form-control" style="width:auto; padding:3px 8px; font-size:.82rem;" onchange="changeLogsPageSize(this.value)">
+              <option value="15" selected>15</option>
+              <option value="30">30</option>
+              <option value="50">50</option>
+              <option value="100">100</option>
+              <option value="all">All</option>
+            </select>
+          </label>
+        </div>
+      </div>
+
       <div class="table-wrapper">
         <table>
           <thead>
@@ -508,9 +585,13 @@
               <th>IP</th>
             </tr>
           </thead>
-          <tbody>
+          <tbody id="logs-tbody">
             {% for log in logs %}
-            <tr>
+            <tr data-cert-id="{{ (log.cert_id or '') | lower }}"
+                data-file="{{ (log.file_name or '') | lower }}"
+                data-status="{{ (log.status or '') | lower }}"
+                data-reason="{{ (log.reason or '') | lower }}"
+                data-ip="{{ (log.ip_address or '') | lower }}">
               <td style="color:var(--text-dim); font-size:.78rem;">{{ log.id }}</td>
               <td style="font-size:.82rem; color:var(--text-muted);">{{ log.verified_at }}</td>
               <td>
@@ -534,8 +615,28 @@
               <td style="font-size:.78rem; color:var(--text-dim);">{{ log.ip_address or '—' }}</td>
             </tr>
             {% endfor %}
+            <tr id="logs-no-match" style="display:none;">
+              <td colspan="7" style="text-align:center; padding:2.5rem; color:var(--text-muted);">
+                🔍 No audit log entries found matching your search.
+                <a href="javascript:void(0)" onclick="resetLogsFilter()" style="color:var(--primary); margin-left:.5rem;">Clear Search</a>
+              </td>
+            </tr>
           </tbody>
         </table>
+      </div>
+
+      <!-- Logs Pagination Navigation Footer -->
+      <div id="logs-pagination-wrap" style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:1rem; margin-top:1rem; padding:0 .25rem;">
+        <div id="logs-counter-text" style="font-size:.82rem; color:var(--text-muted);">
+          Showing 1–15 of {{ logs|length }} log entries
+        </div>
+        <div style="display:flex; gap:.35rem; align-items:center;">
+          <button type="button" class="btn btn-ghost btn-sm" id="logs-first-btn" onclick="goLogsPage(1)">« First</button>
+          <button type="button" class="btn btn-ghost btn-sm" id="logs-prev-btn" onclick="goLogsPage(logsCurrentPage - 1)">‹ Prev</button>
+          <span id="logs-page-indicator" style="font-size:.82rem; font-weight:bold; padding:0 .5rem; color:var(--accent-gold);">Page 1 of 1</span>
+          <button type="button" class="btn btn-ghost btn-sm" id="logs-next-btn" onclick="goLogsPage(logsCurrentPage + 1)">Next ›</button>
+          <button type="button" class="btn btn-ghost btn-sm" id="logs-last-btn" onclick="goLogsPage(logsTotalPages)">Last »</button>
+        </div>
       </div>
       {% else %}
         <div class="card" style="text-align:center; padding:3rem;">
@@ -1145,6 +1246,207 @@
       }, 50);
     }
   }
+
+  // ─── Certificate Registry Search & Pagination ──────────────────────────────
+  let regCurrentPage = 1;
+  let regPageSize = 10;
+  let regStatusFilter = 'all';
+
+  function getRegistryRows() {
+    const tbody = document.getElementById('registry-tbody');
+    if (!tbody) return [];
+    return Array.from(tbody.querySelectorAll('tr:not(#registry-no-match)'));
+  }
+
+  function setRegistryStatusFilter(status) {
+    regStatusFilter = status;
+    ['all', 'active', 'revoked', 'expired'].forEach(s => {
+      const btn = document.getElementById('reg-filter-' + s);
+      if (btn) {
+        if (s === status) {
+          btn.className = 'btn btn-sm btn-primary';
+        } else {
+          btn.className = 'btn btn-sm btn-ghost';
+        }
+      }
+    });
+    regCurrentPage = 1;
+    filterRegistry();
+  }
+
+  function changeRegistryPageSize(newSize) {
+    regPageSize = newSize === 'all' ? 999999 : parseInt(newSize, 10);
+    regCurrentPage = 1;
+    filterRegistry();
+  }
+
+  function resetRegistryFilter() {
+    const searchInput = document.getElementById('registry-search');
+    if (searchInput) searchInput.value = '';
+    setRegistryStatusFilter('all');
+  }
+
+  function filterRegistry() {
+    const q = (document.getElementById('registry-search')?.value || '').trim().toLowerCase();
+    const allRows = getRegistryRows();
+    const noMatchRow = document.getElementById('registry-no-match');
+
+    const matched = allRows.filter(row => {
+      const cid = row.getAttribute('data-cert-id') || '';
+      const stu = row.getAttribute('data-student') || '';
+      const cou = row.getAttribute('data-course') || '';
+      const iss = row.getAttribute('data-issuer') || '';
+      const st  = row.getAttribute('data-status') || '';
+
+      const matchesSearch = !q || cid.includes(q) || stu.includes(q) || cou.includes(q) || iss.includes(q);
+      const matchesStatus = regStatusFilter === 'all' || st === regStatusFilter;
+
+      return matchesSearch && matchesStatus;
+    });
+
+    const totalMatches = matched.length;
+    const totalPages = Math.max(1, Math.ceil(totalMatches / regPageSize));
+    if (regCurrentPage > totalPages) regCurrentPage = totalPages;
+    if (regCurrentPage < 1) regCurrentPage = 1;
+
+    const startIdx = (regCurrentPage - 1) * regPageSize;
+    const endIdx = startIdx + regPageSize;
+
+    allRows.forEach(r => r.style.display = 'none');
+    matched.slice(startIdx, endIdx).forEach(r => r.style.display = '');
+
+    if (noMatchRow) {
+      noMatchRow.style.display = totalMatches === 0 ? '' : 'none';
+    }
+
+    const counterText = document.getElementById('registry-counter-text');
+    if (counterText) {
+      if (totalMatches === 0) {
+        counterText.textContent = 'Showing 0 certificates';
+      } else {
+        const displayStart = startIdx + 1;
+        const displayEnd = Math.min(endIdx, totalMatches);
+        counterText.textContent = `Showing ${displayStart}–${displayEnd} of ${totalMatches} certificate${totalMatches > 1 ? 's' : ''}`;
+      }
+    }
+
+    const pageIndicator = document.getElementById('reg-page-indicator');
+    if (pageIndicator) {
+      pageIndicator.textContent = `Page ${regCurrentPage} of ${totalPages}`;
+    }
+
+    const firstBtn = document.getElementById('reg-first-btn');
+    const prevBtn  = document.getElementById('reg-prev-btn');
+    const nextBtn  = document.getElementById('reg-next-btn');
+    const lastBtn  = document.getElementById('reg-last-btn');
+
+    if (firstBtn) firstBtn.disabled = regCurrentPage <= 1;
+    if (prevBtn)  prevBtn.disabled  = regCurrentPage <= 1;
+    if (nextBtn)  nextBtn.disabled  = regCurrentPage >= totalPages;
+    if (lastBtn)  lastBtn.disabled  = regCurrentPage >= totalPages;
+
+    window.regTotalPages = totalPages;
+  }
+
+  function goRegistryPage(page) {
+    const total = window.regTotalPages || 1;
+    if (page < 1 || page > total) return;
+    regCurrentPage = page;
+    filterRegistry();
+  }
+
+  // ─── Verification Logs Search & Pagination ──────────────────────────────────
+  let logsCurrentPage = 1;
+  let logsPageSize = 15;
+
+  function getLogsRows() {
+    const tbody = document.getElementById('logs-tbody');
+    if (!tbody) return [];
+    return Array.from(tbody.querySelectorAll('tr:not(#logs-no-match)'));
+  }
+
+  function changeLogsPageSize(newSize) {
+    logsPageSize = newSize === 'all' ? 999999 : parseInt(newSize, 10);
+    logsCurrentPage = 1;
+    filterLogs();
+  }
+
+  function resetLogsFilter() {
+    const searchInput = document.getElementById('logs-search');
+    if (searchInput) searchInput.value = '';
+    filterLogs();
+  }
+
+  function filterLogs() {
+    const q = (document.getElementById('logs-search')?.value || '').trim().toLowerCase();
+    const allRows = getLogsRows();
+    const noMatchRow = document.getElementById('logs-no-match');
+
+    const matched = allRows.filter(row => {
+      const cid = row.getAttribute('data-cert-id') || '';
+      const fn  = row.getAttribute('data-file') || '';
+      const st  = row.getAttribute('data-status') || '';
+      const re  = row.getAttribute('data-reason') || '';
+      const ip  = row.getAttribute('data-ip') || '';
+
+      return !q || cid.includes(q) || fn.includes(q) || st.includes(q) || re.includes(q) || ip.includes(q);
+    });
+
+    const totalMatches = matched.length;
+    const totalPages = Math.max(1, Math.ceil(totalMatches / logsPageSize));
+    if (logsCurrentPage > totalPages) logsCurrentPage = totalPages;
+    if (logsCurrentPage < 1) logsCurrentPage = 1;
+
+    const startIdx = (logsCurrentPage - 1) * logsPageSize;
+    const endIdx = startIdx + logsPageSize;
+
+    allRows.forEach(r => r.style.display = 'none');
+    matched.slice(startIdx, endIdx).forEach(r => r.style.display = '');
+
+    if (noMatchRow) {
+      noMatchRow.style.display = totalMatches === 0 ? '' : 'none';
+    }
+
+    const counterText = document.getElementById('logs-counter-text');
+    if (counterText) {
+      if (totalMatches === 0) {
+        counterText.textContent = 'Showing 0 log entries';
+      } else {
+        const displayStart = startIdx + 1;
+        const displayEnd = Math.min(endIdx, totalMatches);
+        counterText.textContent = `Showing ${displayStart}–${displayEnd} of ${totalMatches} log entr${totalMatches > 1 ? 'ies' : 'y'}`;
+      }
+    }
+
+    const pageIndicator = document.getElementById('logs-page-indicator');
+    if (pageIndicator) {
+      pageIndicator.textContent = `Page ${logsCurrentPage} of ${totalPages}`;
+    }
+
+    const firstBtn = document.getElementById('logs-first-btn');
+    const prevBtn  = document.getElementById('logs-prev-btn');
+    const nextBtn  = document.getElementById('logs-next-btn');
+    const lastBtn  = document.getElementById('logs-last-btn');
+
+    if (firstBtn) firstBtn.disabled = logsCurrentPage <= 1;
+    if (prevBtn)  prevBtn.disabled  = logsCurrentPage <= 1;
+    if (nextBtn)  nextBtn.disabled  = logsCurrentPage >= totalPages;
+    if (lastBtn)  lastBtn.disabled  = logsCurrentPage >= totalPages;
+
+    window.logsTotalPages = totalPages;
+  }
+
+  function goLogsPage(page) {
+    const total = window.logsTotalPages || 1;
+    if (page < 1 || page > total) return;
+    logsCurrentPage = page;
+    filterLogs();
+  }
+
+  document.addEventListener('DOMContentLoaded', function() {
+    filterRegistry();
+    filterLogs();
+  });
 
   (function() {
     const params = new URLSearchParams(window.location.search);
