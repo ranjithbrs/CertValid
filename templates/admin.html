@@ -150,8 +150,9 @@
       <button class="admin-tab" id="tab-logs-btn"     onclick="showTab('logs')">📜 Audit Logs</button>
       <button class="admin-tab" id="tab-security-btn" onclick="showTab('security')">🔐 Security (2FA)</button>
       {% if admin_role == 'superadmin' %}
-        <button class="admin-tab" id="tab-apikeys-btn"  onclick="showTab('apikeys')">🔑 API Keys</button>
-        <button class="admin-tab" id="tab-themes-btn"   onclick="showTab('themes')">🎨 Themes</button>
+        <button class="admin-tab" id="tab-apikeys-btn"        onclick="showTab('apikeys')">🔑 API Keys</button>
+        <button class="admin-tab" id="tab-themes-btn"         onclick="showTab('themes')">🎨 Themes</button>
+        <button class="admin-tab" id="tab-notifications-btn"  onclick="showTab('notifications')">🔔 Notifications</button>
       {% endif %}
     </div>
 
@@ -581,6 +582,108 @@
           </form>
 
         </div>
+      </div>
+    </div>
+
+    <!-- ── Notifications Tab (Webhooks & Email Alerts) ── -->
+    <div class="admin-tab-pane" id="tab-notifications" style="display:none;">
+      <div class="card" style="margin-bottom:1.5rem;">
+        <h3 style="margin-bottom:.5rem; font-size:1.1rem; display:flex; align-items:center; gap:.5rem;">
+          🔔 Webhooks & Automated Email Alerts
+        </h3>
+        <p style="color:var(--text-muted); font-size:.88rem; margin-bottom:1.5rem;">
+          Configure automated JSON Webhook endpoints (Discord, Slack, Zapier) and SMTP Email notifications for certificate issuance, revocation, and security events.
+        </p>
+
+        <form method="POST" action="{{ url_for('admin_notification_settings') }}">
+          
+          <!-- Webhook Configuration Card -->
+          <div style="background:var(--bg-card); border:1px solid var(--border-color); border-radius:8px; padding:1.25rem; margin-bottom:1.5rem;">
+            <h4 style="font-size:1rem; color:var(--accent-gold); margin-bottom:1rem; display:flex; align-items:center; gap:.5rem;">
+              🔗 Outgoing POST Webhooks
+            </h4>
+            
+            <div class="form-group" style="display:flex; align-items:center; gap:.75rem; margin-bottom:1rem;">
+              <input type="checkbox" id="webhook_enabled" name="webhook_enabled" style="width:18px; height:18px;" {% if notification_settings and notification_settings.webhook_enabled == 'true' %}checked{% endif %}>
+              <label for="webhook_enabled" style="font-weight:600; cursor:pointer; font-size:.92rem;">
+                Enable Outgoing HTTP Webhooks
+              </label>
+            </div>
+
+            <div class="form-group" style="margin-bottom:1rem;">
+              <label class="form-label" for="webhook_url">Webhook Destination URL</label>
+              <input type="url" id="webhook_url" name="webhook_url" class="form-control" placeholder="https://discord.com/api/webhooks/... or https://hooks.slack.com/services/..." value="{{ notification_settings.webhook_url if notification_settings else '' }}">
+              <small style="color:var(--text-muted); font-size:.78rem; display:block; margin-top:.25rem;">
+                CertValid sends JSON POST payloads containing event metadata to this endpoint.
+              </small>
+            </div>
+          </div>
+
+          <!-- SMTP Email Alerts Configuration -->
+          <div style="background:var(--bg-card); border:1px solid var(--border-color); border-radius:8px; padding:1.25rem; margin-bottom:1.5rem;">
+            <h4 style="font-size:1rem; color:var(--emerald-light); margin-bottom:1rem; display:flex; align-items:center; gap:.5rem;">
+              📧 SMTP Email Notification Server
+            </h4>
+
+            <div class="form-group" style="display:flex; align-items:center; gap:.75rem; margin-bottom:1rem;">
+              <input type="checkbox" id="email_alerts_enabled" name="email_alerts_enabled" style="width:18px; height:18px;" {% if notification_settings and notification_settings.email_alerts_enabled == 'true' %}checked{% endif %}>
+              <label for="email_alerts_enabled" style="font-weight:600; cursor:pointer; font-size:.92rem;">
+                Enable Automated Email Alerts
+              </label>
+            </div>
+
+            <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap:1rem; margin-bottom:1rem;">
+              <div class="form-group" style="margin-bottom:0;">
+                <label class="form-label" for="smtp_host">SMTP Host</label>
+                <input type="text" id="smtp_host" name="smtp_host" class="form-control" placeholder="smtp.gmail.com" value="{{ notification_settings.smtp_host if notification_settings else '' }}">
+              </div>
+
+              <div class="form-group" style="margin-bottom:0;">
+                <label class="form-label" for="smtp_port">SMTP Port</label>
+                <input type="text" id="smtp_port" name="smtp_port" class="form-control" placeholder="587" value="{{ notification_settings.smtp_port if notification_settings else '587' }}">
+              </div>
+            </div>
+
+            <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap:1rem; margin-bottom:1rem;">
+              <div class="form-group" style="margin-bottom:0;">
+                <label class="form-label" for="smtp_user">SMTP Username / Email</label>
+                <input type="text" id="smtp_user" name="smtp_user" class="form-control" placeholder="admin@example.com" value="{{ notification_settings.smtp_user if notification_settings else '' }}">
+              </div>
+
+              <div class="form-group" style="margin-bottom:0;">
+                <label class="form-label" for="smtp_pass">SMTP Password / App Secret</label>
+                <input type="password" id="smtp_pass" name="smtp_pass" class="form-control" placeholder="••••••••••••" value="{{ notification_settings.smtp_pass if notification_settings else '' }}">
+              </div>
+            </div>
+
+            <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap:1rem;">
+              <div class="form-group" style="margin-bottom:0;">
+                <label class="form-label" for="sender_email">Sender Email ("From")</label>
+                <input type="email" id="sender_email" name="sender_email" class="form-control" placeholder="alerts@certvalid.io" value="{{ notification_settings.sender_email if notification_settings else '' }}">
+              </div>
+
+              <div class="form-group" style="margin-bottom:0;">
+                <label class="form-label" for="alert_email">Alert Recipient Email ("To")</label>
+                <input type="email" id="alert_email" name="alert_email" class="form-control" placeholder="security-team@company.com" value="{{ notification_settings.alert_email if notification_settings else '' }}">
+              </div>
+            </div>
+          </div>
+
+          <div style="display:flex; gap:1rem; align-items:center;">
+            <button type="submit" class="btn btn-primary">💾 Save Notification Settings</button>
+          </div>
+        </form>
+      </div>
+
+      <!-- Webhook Testing Card -->
+      <div class="card">
+        <h4 style="font-size:1rem; margin-bottom:.5rem;">🧪 Webhook Endpoint Diagnostics</h4>
+        <p style="color:var(--text-muted); font-size:.85rem; margin-bottom:1rem;">
+          Dispatch a background test JSON payload to your destination Webhook URL to verify connectivity.
+        </p>
+        <form method="POST" action="{{ url_for('admin_test_webhook') }}">
+          <button type="submit" class="btn btn-ghost">⚡ Send Test Webhook Event</button>
+        </form>
       </div>
     </div>
 
