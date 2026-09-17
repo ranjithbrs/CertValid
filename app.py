@@ -1,7 +1,7 @@
 """
 app.py - Flask application for the Certificate Verification & Management System.
 Handles public verification (file upload or cert ID), admin dashboard, certificate issuance.
-Includes rate limiting, anti-spam, security headers, pHash, OCR text extraction, and Ed25519 digital signatures.
+Includes rate limiting, anti-spam, security headers, pHash, OCR text extraction, Ed25519 digital signatures, and Cloud Storage.
 """
 
 import os
@@ -22,6 +22,7 @@ import qrcode
 import imagehash
 
 import db
+import storage
 
 # ─── App Setup ───────────────────────────────────────────────────────────────
 
@@ -85,7 +86,7 @@ def login_required(f):
 def generate_certificate_image(cert_data: dict, cert_id: str) -> str:
     """
     Generate a certificate PNG image with embedded QR code.
-    Computes and stores its perceptual hash (pHash) in the database.
+    Computes and stores its perceptual hash (pHash) and uploads to S3 if configured.
     Returns the relative path (relative to static/) to the saved image.
     """
     W, H = 1100, 780
@@ -183,6 +184,9 @@ def generate_certificate_image(cert_data: dict, cert_id: str) -> str:
     filename  = f'{cert_id}.png'
     save_path = os.path.join(CERT_FOLDER, filename)
     img.save(save_path, 'PNG')
+
+    # Cloud Storage S3 upload (if configured via S3_BUCKET_NAME)
+    storage.upload_to_s3(save_path)
 
     try:
         phash_str = str(imagehash.phash(img))
