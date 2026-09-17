@@ -285,9 +285,25 @@
 
     <!-- ── Audit Logs Tab ── -->
     <div class="admin-tab-pane" id="tab-logs" style="display:none;">
-      <div class="section-header">
-        <span class="section-title">📜 Verification Audit Logs</span>
-        <span style="font-size:.85rem; color:var(--text-muted);">Last {{ logs|length }} entries</span>
+      <div class="section-header" style="flex-wrap:wrap; gap:1rem; align-items:center;">
+        <div>
+          <span class="section-title">📜 Verification Audit Logs</span>
+          <span style="font-size:.85rem; color:var(--text-muted); margin-left:.5rem;">Showing {{ logs|length }} entries</span>
+        </div>
+
+        <div style="display:flex; gap:.75rem; align-items:center; flex-wrap:wrap;">
+          <!-- Status Filters -->
+          <div style="display:flex; background:var(--bg-card); border:1px solid var(--border-color); border-radius:6px; padding:2px;">
+            <a href="?tab=logs&status=ALL" class="btn btn-sm {% if not selected_status or selected_status == 'ALL' %}btn-primary{% else %}btn-ghost{% endif %}" style="padding:4px 10px; font-size:.8rem;">All</a>
+            <a href="?tab=logs&status=AUTHENTIC" class="btn btn-sm {% if selected_status == 'AUTHENTIC' %}btn-primary{% else %}btn-ghost{% endif %}" style="padding:4px 10px; font-size:.8rem;">Authentic</a>
+            <a href="?tab=logs&status=INVALID" class="btn btn-sm {% if selected_status == 'INVALID' %}btn-primary{% else %}btn-ghost{% endif %}" style="padding:4px 10px; font-size:.8rem;">Invalid</a>
+            <a href="?tab=logs&status=REVOKED" class="btn btn-sm {% if selected_status == 'REVOKED' %}btn-primary{% else %}btn-ghost{% endif %}" style="padding:4px 10px; font-size:.8rem;">Revoked</a>
+          </div>
+
+          <!-- Export Actions -->
+          <a href="{{ url_for('admin_export_logs_csv', status=selected_status or 'ALL') }}" class="btn btn-ghost btn-sm" title="Export to CSV">📥 Export CSV</a>
+          <a href="{{ url_for('admin_export_logs_pdf', status=selected_status or 'ALL') }}" class="btn btn-primary btn-sm" title="Generate PDF Audit Report">📄 Export PDF</a>
+        </div>
       </div>
 
       {% if logs %}

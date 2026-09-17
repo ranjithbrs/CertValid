@@ -496,12 +496,18 @@ def log_verification(cert_id, file_name, computed_hash, status, reason, ip_addre
     conn.close()
 
 
-def get_all_logs(limit=100):
-    """Fetch verification logs ordered by most recent."""
+def get_all_logs(limit=500, status_filter=None):
+    """Fetch verification logs ordered by most recent, optionally filtered by status."""
     conn = get_db()
-    rows = conn.execute(
-        'SELECT * FROM verification_logs ORDER BY verified_at DESC LIMIT ?', (limit,)
-    ).fetchall()
+    if status_filter and status_filter.upper() != 'ALL':
+        rows = conn.execute(
+            'SELECT * FROM verification_logs WHERE status = ? ORDER BY verified_at DESC LIMIT ?',
+            (status_filter.upper(), limit)
+        ).fetchall()
+    else:
+        rows = conn.execute(
+            'SELECT * FROM verification_logs ORDER BY verified_at DESC LIMIT ?', (limit,)
+        ).fetchall()
     conn.close()
     return [dict(r) for r in rows]
 

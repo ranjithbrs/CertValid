@@ -7,13 +7,15 @@ Includes rate limiting, anti-spam, security headers, pHash, OCR text extraction,
 import os
 import io
 import uuid
+import csv
 import hashlib
 from datetime import datetime, timedelta
 from functools import wraps
 
 from flask import (
     Flask, render_template, request, redirect,
-    url_for, session, send_file, flash, jsonify
+    url_for, session, send_file, flash, jsonify,
+    Response, make_response
 )
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
@@ -562,7 +564,8 @@ def admin_2fa_disable():
 @login_required
 def admin_dashboard():
     certs = db.get_all_certificates()
-    logs  = db.get_all_logs(50)
+    status_filter = request.args.get('status', 'ALL')
+    logs  = db.get_all_logs(limit=100, status_filter=status_filter)
     stats = db.get_stats()
     admin_role = session.get('admin_role', 'superadmin')
     username   = session.get('admin_user', 'admin')
@@ -571,7 +574,135 @@ def admin_dashboard():
     return render_template('admin.html', logged_in=True,
                            certs=certs, logs=logs, stats=stats,
                            admin_role=admin_role, totp_status=totp_status,
-                           api_keys=api_keys, active_tab='overview')
+                           api_keys=api_keys, selected_status=status_filter,
+                           active_tab='overview')
+
+
+@app.route('/admin/logs/export/csv', methods=['GET'])
+@login_required
+def admin_export_logs_csv():
+    """Export verification logs to a CSV file."""
+    status_filter = request.args.get('status', 'ALL')
+    logs = db.get_all_logs(limit=2000, status_filter=status_filter)
+
+    output = io.StringIO()
+    writer = csv.writer(output)
+    writer.writerow(['Log ID', 'Certificate ID', 'Uploaded File', 'SHA-256 Hash', 'Status', 'Reason', 'Verified At', 'IP Address'])
+
+    for row in logs:
+        writer.writerow([
+            row.get('id', ''),
+            row.get('cert_id') or '',
+            row.get('file_name') or '',
+            row.get('computed_hash') or '',
+            row.get('status', ''),
+            row.get('reason', ''),
+            row.get('verified_at', ''),
+            row.get('ip_address') or ''
+        ])
+
+    today_str = datetime.now().strftime('%Y%m%d')
+    filename = f"CertValid_Audit_Logs_{status_filter}_{today_str}.csv"
+    response = make_response(output.getvalue())
+    response.headers["Content-Disposition"] = f"attachment; filename={filename}"
+    response.headers["Content-Type"] = "text/csv"
+    return response
+
+
+@app.route('/admin/logs/export/pdf', methods=['GET'])
+@login_required
+def admin_export_logs_pdf():
+    """Generate and download executive PDF audit report using ReportLab."""
+    status_filter = request.args.get('status', 'ALL')
+    logs  = db.get_all_logs(limit=200, status_filter=status_filter)
+    stats = db.get_stats()
+
+    try:
+        from reportlab.lib.pagesizes import letter
+        from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
+        from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+        from reportlab.lib import colors
+
+        buffer = io.BytesIO()
+        doc = SimpleDocTemplate(buffer, pagesize=letter, rightMargin=36, leftMargin=36, topMargin=36, bottomMargin=36)
+        story = []
+        styles = getSampleStyleSheet()
+
+        title_style = ParagraphStyle(
+            'ReportTitle',
+            parent=styles['Heading1'],
+            fontSize=18,
+            leading=22,
+            textColor=colors.HexColor('#d4af37'),
+            alignment=1,
+            spaceAfter=8
+        )
+        story.append(Paragraph("🛡️ CertValid Verification Audit Report", title_style))
+        story.append(Paragraph(f"Generated on: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} | Filter: {status_filter}", styles['Normal']))
+        story.append(Spacer(1, 10))
+
+        summary_data = [
+            ["Total Certs", "Active Certs", "Revoked Certs", "Total Verifications", "Authentic", "Invalid / Revoked"],
+            [
+                str(stats.get('total_certs', 0)),
+                str(stats.get('active_certs', 0)),
+                str(stats.get('revoked_certs', 0)),
+                str(stats.get('total_verifications', 0)),
+                str(stats.get('authentic_verifications', 0)),
+                str(stats.get('failed_verifications', 0) + stats.get('revoked_verifications', 0))
+            ]
+        ]
+        summary_table = Table(summary_data, colWidths=[85]*6)
+        summary_table.setStyle(TableStyle([
+            ('BACKGROUND', (0,0), (-1,0), colors.HexColor('#1f293d')),
+            ('TEXTCOLOR', (0,0), (-1,0), colors.HexColor('#d4af37')),
+            ('ALIGN', (0,0), (-1,-1), 'CENTER'),
+            ('FONTNAME', (0,0), (-1,0), 'Helvetica-Bold'),
+            ('FONTSIZE', (0,0), (-1,-1), 8),
+            ('BOTTOMPADDING', (0,0), (-1,-1), 4),
+            ('GRID', (0,0), (-1,-1), 0.5, colors.HexColor('#374151')),
+        ]))
+        story.append(summary_table)
+        story.append(Spacer(1, 14))
+
+        log_headers = ["ID", "Cert ID", "File / Input", "Status", "Reason / Detail", "Timestamp", "IP Address"]
+        log_rows = [log_headers]
+        for r in logs:
+            cert_id = r.get('cert_id') or '—'
+            file_name = r.get('file_name') or 'Direct ID'
+            status = r.get('status') or 'UNKNOWN'
+            reason = (r.get('reason') or '')[:32]
+            timestamp = (r.get('verified_at') or '')[:19]
+            ip = r.get('ip_address') or '—'
+            log_rows.append([str(r.get('id', '')), cert_id, file_name, status, reason, timestamp, ip])
+
+        logs_table = Table(log_rows, colWidths=[25, 80, 90, 60, 130, 95, 60])
+        logs_table.setStyle(TableStyle([
+            ('BACKGROUND', (0,0), (-1,0), colors.HexColor('#111827')),
+            ('TEXTCOLOR', (0,0), (-1,0), colors.white),
+            ('ALIGN', (0,0), (-1,-1), 'LEFT'),
+            ('FONTNAME', (0,0), (-1,0), 'Helvetica-Bold'),
+            ('FONTSIZE', (0,0), (-1,-1), 7),
+            ('BOTTOMPADDING', (0,0), (-1,-1), 3),
+            ('GRID', (0,0), (-1,-1), 0.5, colors.HexColor('#1f2937')),
+        ]))
+        story.append(logs_table)
+
+        doc.build(story)
+        buffer.seek(0)
+        pdf_bytes = buffer.getvalue()
+
+        today_str = datetime.now().strftime('%Y%m%d')
+        filename = f"CertValid_Audit_Report_{status_filter}_{today_str}.pdf"
+        response = make_response(pdf_bytes)
+        response.headers["Content-Disposition"] = f"attachment; filename={filename}"
+        response.headers["Content-Type"] = "application/pdf"
+        return response
+
+    except Exception as e:
+        app.logger.error(f'Failed to generate PDF audit report: {e}')
+        flash('PDF report generation failed. Ensure ReportLab is installed.', 'error')
+        return redirect(url_for('admin_dashboard') + '?tab=logs')
 
 
 @app.route('/admin/api-keys/create', methods=['POST'])
