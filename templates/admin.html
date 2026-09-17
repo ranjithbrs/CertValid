@@ -292,9 +292,7 @@
                   <a href="{{ url_for('download_cert', cert_id=cert.cert_id) }}" class="btn btn-ghost btn-sm">⬇️</a>
                   {% if admin_role == 'superadmin' %}
                     {% if cert.status == 'active' %}
-                      <form method="POST" action="{{ url_for('admin_revoke', cert_id=cert.cert_id) }}" onsubmit="return confirm('Revoke certificate {{ cert.cert_id }}?')">
-                        <button type="submit" class="btn btn-danger btn-sm">🚫 Revoke</button>
-                      </form>
+                      <a href="{{ url_for('admin_revoke_confirm', cert_id=cert.cert_id) }}" class="btn btn-danger btn-sm">🚫 Revoke</a>
                     {% else %}
                       <form method="POST" action="{{ url_for('admin_reactivate', cert_id=cert.cert_id) }}">
                         <button type="submit" class="btn btn-success btn-sm">✅ Reactivate</button>

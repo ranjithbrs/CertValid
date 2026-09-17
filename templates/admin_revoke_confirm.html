@@ -1,0 +1,104 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Confirm Certificate Revocation — CertValid Security</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+
+<nav class="navbar">
+  <div class="navbar-brand">
+    <div class="logo-icon">🛡️</div>
+    CertValid Security
+  </div>
+  <div class="navbar-links">
+    <a href="{{ url_for('admin_dashboard') }}?tab=registry">← Cancel & Return to Registry</a>
+  </div>
+</nav>
+
+<div class="page-wrapper" style="max-width:640px; margin:2rem auto;">
+  <div class="container">
+    <div class="card fade-in-up" style="border:1px solid var(--red);">
+      <div style="text-align:center; margin-bottom:1.5rem;">
+        <div style="font-size:2.5rem; margin-bottom:.5rem;">⚠️</div>
+        <h1 style="font-size:1.5rem; color:var(--red-light);">Confirm Certificate Revocation</h1>
+        <p style="color:var(--text-muted); font-size:.9rem; margin-top:.25rem;">
+          Revoking a certificate is an irreversible action. Once revoked, verification queries will report this certificate as REVOKED.
+        </p>
+      </div>
+
+      {% with messages = get_flashed_messages(with_categories=true) %}
+        {% if messages %}
+          <ul class="flash-list">
+            {% for category, message in messages %}
+              <li class="flash flash-{{ category }}">
+                {% if category == 'success' %}✅{% elif category == 'error' %}❌{% else %}⚠️{% endif %}
+                {{ message }}
+              </li>
+            {% endfor %}
+          </ul>
+        {% endif %}
+      {% endwith %}
+
+      <!-- Certificate Summary Card -->
+      <div style="background:var(--bg-card); border:1px solid var(--border-color); border-radius:10px; padding:1.25rem; margin-bottom:1.5rem;">
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:1rem; border-bottom:1px solid var(--border-color); padding-bottom:.75rem;">
+          <span style="font-weight:bold; color:var(--text-light);">Certificate ID:</span>
+          <span class="cert-id-display">{{ cert.cert_id }}</span>
+        </div>
+        <div style="display:grid; grid-template-columns:1fr 1fr; gap:.75rem; font-size:.88rem;">
+          <div>
+            <span style="color:var(--text-muted); display:block; font-size:.78rem;">Student Name</span>
+            <strong>{{ cert.student_name }}</strong>
+          </div>
+          <div>
+            <span style="color:var(--text-muted); display:block; font-size:.78rem;">Course</span>
+            <strong>{{ cert.course_name }}</strong>
+          </div>
+          <div>
+            <span style="color:var(--text-muted); display:block; font-size:.78rem;">Issuing Authority</span>
+            <span>{{ cert.issuer_name }}</span>
+          </div>
+          <div>
+            <span style="color:var(--text-muted); display:block; font-size:.78rem;">Issue Date</span>
+            <span>{{ cert.issue_date }}</span>
+          </div>
+        </div>
+      </div>
+
+      <form method="POST" action="{{ url_for('admin_revoke', cert_id=cert.cert_id) }}">
+        {% if totp_status and totp_status.enabled %}
+          <div class="form-group">
+            <label class="form-label" for="totp_code" style="text-align:center; display:block; font-weight:bold;">
+              🔐 Enter 6-Digit 2FA Verification Code
+            </label>
+            <input type="text" id="totp_code" name="totp_code" class="form-control"
+                   placeholder="123456" required autocomplete="one-time-code" maxlength="6"
+                   style="font-size:1.6rem; letter-spacing:8px; text-align:center; font-family:monospace;"
+                   autofocus>
+          </div>
+        {% else %}
+          <div style="background:rgba(239,68,68,0.1); border:1px solid var(--red); padding:1rem; border-radius:8px; margin-bottom:1.25rem; font-size:.85rem; color:var(--red-light); text-align:center;">
+            ⚠️ 2FA is currently disabled on your account. To enforce maximum security for revocations, enable 2FA in the Security tab.
+          </div>
+          <input type="hidden" name="confirm_unprotected" value="yes">
+        {% endif %}
+
+        <button type="submit" class="btn btn-danger btn-full btn-lg" style="margin-top:.5rem;">
+          ❌ Confirm & Revoke Certificate
+        </button>
+      </form>
+
+      <p style="text-align:center; margin-top:1.25rem; font-size:.85rem;">
+        <a href="{{ url_for('admin_dashboard') }}?tab=registry" style="color:var(--text-muted); text-decoration:underline;">
+          Cancel and return to registry
+        </a>
+      </p>
+    </div>
+  </div>
+</div>
+
+</body>
+</html>
