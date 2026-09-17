@@ -26,6 +26,7 @@ import imagehash
 
 import db
 import storage
+import notifications
 
 # ─── App Setup ───────────────────────────────────────────────────────────────
 
@@ -615,11 +616,23 @@ def admin_dashboard():
     totp_status = db.get_admin_2fa_status(username)
     api_keys   = db.get_all_api_keys()
     current_theme = db.get_setting('cert_theme', 'gold')
+    notification_settings = {
+        'webhook_enabled': db.get_setting('webhook_enabled', 'false'),
+        'webhook_url': db.get_setting('webhook_url', ''),
+        'email_alerts_enabled': db.get_setting('email_alerts_enabled', 'false'),
+        'smtp_host': db.get_setting('smtp_host', ''),
+        'smtp_port': db.get_setting('smtp_port', '587'),
+        'smtp_user': db.get_setting('smtp_user', ''),
+        'smtp_pass': db.get_setting('smtp_pass', ''),
+        'sender_email': db.get_setting('sender_email', 'alerts@certvalid.io'),
+        'alert_email': db.get_setting('alert_email', ''),
+    }
     return render_template('admin.html', logged_in=True,
                            certs=certs, logs=logs, stats=stats,
                            admin_role=admin_role, totp_status=totp_status,
                            api_keys=api_keys, selected_status=status_filter,
                            current_theme=current_theme,
+                           notification_settings=notification_settings,
                            active_tab='overview')
 
 
@@ -632,6 +645,48 @@ def admin_select_theme():
         db.set_setting('cert_theme', theme)
         flash(f'Certificate visual theme updated to {theme.capitalize()}!', 'success')
     return redirect(url_for('admin_dashboard') + '?tab=themes')
+
+
+@app.route('/admin/notifications/settings', methods=['POST'])
+@role_required('superadmin')
+def admin_notification_settings():
+    """Save Webhook and Email alert configurations."""
+    webhook_enabled      = 'true' if request.form.get('webhook_enabled') else 'false'
+    webhook_url          = request.form.get('webhook_url', '').strip()
+    email_alerts_enabled = 'true' if request.form.get('email_alerts_enabled') else 'false'
+    smtp_host            = request.form.get('smtp_host', '').strip()
+    smtp_port            = request.form.get('smtp_port', '587').strip()
+    smtp_user            = request.form.get('smtp_user', '').strip()
+    smtp_pass            = request.form.get('smtp_pass', '').strip()
+    sender_email         = request.form.get('sender_email', '').strip()
+    alert_email          = request.form.get('alert_email', '').strip()
+
+    db.set_setting('webhook_enabled', webhook_enabled)
+    db.set_setting('webhook_url', webhook_url)
+    db.set_setting('email_alerts_enabled', email_alerts_enabled)
+    db.set_setting('smtp_host', smtp_host)
+    db.set_setting('smtp_port', smtp_port)
+    db.set_setting('smtp_user', smtp_user)
+    db.set_setting('smtp_pass', smtp_pass)
+    db.set_setting('sender_email', sender_email)
+    db.set_setting('alert_email', alert_email)
+
+    flash('Notification & Webhook alert settings updated successfully!', 'success')
+    return redirect(url_for('admin_dashboard') + '?tab=notifications')
+
+
+@app.route('/admin/notifications/test-webhook', methods=['POST'])
+@role_required('superadmin')
+def admin_test_webhook():
+    """Dispatch test webhook event."""
+    notifications.trigger_event('TEST_WEBHOOK_EVENT', {
+        'message': 'CertValid test Webhook ping successful!',
+        'triggered_by': session.get('admin_user', 'admin'),
+        'timestamp': datetime.now().isoformat()
+    })
+    flash('Test Webhook notification triggered asynchronously!', 'info')
+    return redirect(url_for('admin_dashboard') + '?tab=notifications')
+
 
 
 @app.route('/admin/logs/export/csv', methods=['GET'])
@@ -810,6 +865,15 @@ def admin_issue():
     except Exception as e:
         app.logger.error(f'Certificate image generation failed: {e}')
 
+    notifications.trigger_event('CERTIFICATE_ISSUED', {
+        'cert_id': cert_id,
+        'student_name': student_name,
+        'course_name': course_name,
+        'issuer_name': issuer_name,
+        'issue_date': issue_date,
+        'issued_by': session.get('admin_user', 'admin')
+    })
+
     flash(f'Certificate issued successfully with Ed25519 digital signature! ID: {cert_id}', 'success')
     return redirect(url_for('admin_dashboard') + '?tab=registry')
 
@@ -892,6 +956,12 @@ def admin_issue_bulk():
         today_str = datetime.now().strftime('%Y%m%d_%H%M%S')
         filename = f"CertValid_Bulk_Certificates_{today_str}.zip"
         
+        notifications.trigger_event('BULK_CERTIFICATES_ISSUED', {
+            'count': len(issued_certs),
+            'cert_ids': issued_certs,
+            'issued_by': session.get('admin_user', 'admin')
+        })
+
         flash(f'Successfully issued {len(issued_certs)} certificates! Downloading ZIP archive...', 'success')
         response = make_response(zip_buffer.getvalue())
         response.headers["Content-Disposition"] = f"attachment; filename={filename}"
@@ -935,6 +1005,11 @@ def admin_revoke(cert_id):
             return redirect(url_for('admin_dashboard') + '?tab=registry')
 
     db.revoke_certificate(cert_id)
+    notifications.trigger_event('CERTIFICATE_REVOKED', {
+        'cert_id': cert_id,
+        'revoked_by': username,
+        'timestamp': datetime.now().isoformat()
+    })
     flash(f'Certificate {cert_id} has been revoked with security verification.', 'warning')
     return redirect(url_for('admin_dashboard') + '?tab=registry')
 
