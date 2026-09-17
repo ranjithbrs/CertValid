@@ -229,6 +229,17 @@ def init_db():
     except Exception:
         pass
 
+    # API Keys table
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS api_keys (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            key_name TEXT NOT NULL,
+            api_key TEXT UNIQUE NOT NULL,
+            created_at TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'active'
+        )
+    ''')
+
     # Seed default admin with secure PBKDF2 hash & superadmin role
     existing_admin = c.execute(
         'SELECT id FROM admin_users WHERE username = ?', ('admin',)
@@ -650,4 +661,57 @@ def get_admin_2fa_status(username: str) -> dict:
         r = dict(row)
         return {'enabled': bool(r.get('totp_enabled')), 'secret': r.get('totp_secret')}
     return {'enabled': False, 'secret': None}
+
+
+# ─── API Key Management & Authentication Helpers ─────────────────────────────
+
+def generate_api_key(key_name: str) -> dict:
+    """Generate a new API key with 'cv_live_' prefix and store in DB."""
+    raw_key = f"cv_live_{uuid.uuid4().hex}"
+    now = datetime.now().isoformat(sep=' ', timespec='seconds')
+    conn = get_db()
+    c = conn.cursor()
+    c.execute('''
+        INSERT INTO api_keys (key_name, api_key, created_at, status)
+        VALUES (?, ?, ?, 'active')
+    ''', (key_name, raw_key, now))
+    key_id = c.lastrowid
+    conn.commit()
+    conn.close()
+    return {
+        'id': key_id,
+        'key_name': key_name,
+        'api_key': raw_key,
+        'created_at': now,
+        'status': 'active'
+    }
+
+
+def validate_api_key(api_key: str) -> bool:
+    """Validate if an API key is valid and active."""
+    if not api_key:
+        return False
+    conn = get_db()
+    row = conn.execute(
+        "SELECT id FROM api_keys WHERE api_key = ? AND status = 'active'", (api_key.strip(),)
+    ).fetchone()
+    conn.close()
+    return row is not None
+
+
+def get_all_api_keys() -> list:
+    """Fetch all API keys ordered by creation date descending."""
+    conn = get_db()
+    rows = conn.execute("SELECT * FROM api_keys ORDER BY created_at DESC").fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+def revoke_api_key(key_id: int):
+    """Revoke an API key by setting status = 'revoked'."""
+    conn = get_db()
+    conn.execute("UPDATE api_keys SET status = 'revoked' WHERE id = ?", (key_id,))
+    conn.commit()
+    conn.close()
+
 

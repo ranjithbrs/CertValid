@@ -148,6 +148,9 @@
       <button class="admin-tab" id="tab-registry-btn" onclick="showTab('registry')">📋 Registry</button>
       <button class="admin-tab" id="tab-logs-btn"     onclick="showTab('logs')">📜 Audit Logs</button>
       <button class="admin-tab" id="tab-security-btn" onclick="showTab('security')">🔐 Security (2FA)</button>
+      {% if admin_role == 'superadmin' %}
+        <button class="admin-tab" id="tab-apikeys-btn"  onclick="showTab('apikeys')">🔑 API Keys</button>
+      {% endif %}
     </div>
 
     <!-- ── Overview Tab ── -->
@@ -378,6 +381,76 @@
           <a href="{{ url_for('admin_2fa_setup') }}" class="btn btn-primary">📱 Setup Two-Factor Authentication</a>
         {% endif %}
       </div>
+    </div>
+
+    <!-- ── API Keys Tab ── -->
+    <div class="admin-tab-pane" id="tab-apikeys" style="display:none;">
+      <div class="card" style="margin-bottom:1.5rem;">
+        <h3 style="margin-bottom:.5rem; font-size:1.1rem; display:flex; align-items:center; gap:.5rem;">
+          🔑 RESTful API Key Management
+        </h3>
+        <p style="color:var(--text-muted); font-size:.88rem; margin-bottom:1.5rem;">
+          Generate secure API keys to integrate external applications, mobile apps, or automated systems with the CertValid RESTful API (<code>/api/v1/</code>).
+        </p>
+
+        <form method="POST" action="{{ url_for('admin_create_api_key') }}" style="display:flex; gap:1rem; align-items:flex-end; max-width:580px;">
+          <div class="form-group" style="flex:1; margin-bottom:0;">
+            <label class="form-label" for="key_name">API Key Description / Client Name</label>
+            <input type="text" id="key_name" name="key_name" class="form-control" placeholder="e.g., Mobile Verification App" required>
+          </div>
+          <button type="submit" class="btn btn-primary">+ Generate API Key</button>
+        </form>
+      </div>
+
+      {% if api_keys %}
+      <div class="card" style="padding:0; overflow:hidden;">
+        <table class="table" style="width:100%; border-collapse:collapse;">
+          <thead>
+            <tr style="background:var(--bg-card); text-align:left;">
+              <th style="padding:12px 16px;">Key Name</th>
+              <th style="padding:12px 16px;">API Key Token</th>
+              <th style="padding:12px 16px;">Created At</th>
+              <th style="padding:12px 16px;">Status</th>
+              <th style="padding:12px 16px; text-align:right;">Actions</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for k in api_keys %}
+            <tr style="border-top:1px solid var(--border-color);">
+              <td style="padding:12px 16px; font-weight:600;">{{ k.key_name }}</td>
+              <td style="padding:12px 16px;">
+                <code style="font-family:monospace; font-size:.85rem; background:rgba(0,0,0,0.3); padding:3px 8px; border-radius:4px; color:var(--accent-gold);">
+                  {{ k.api_key }}
+                </code>
+              </td>
+              <td style="padding:12px 16px; font-size:.82rem; color:var(--text-muted);">{{ k.created_at }}</td>
+              <td style="padding:12px 16px;">
+                {% if k.status == 'active' %}
+                  <span class="badge badge-authentic">Active</span>
+                {% else %}
+                  <span class="badge badge-revoked">Revoked</span>
+                {% endif %}
+              </td>
+              <td style="padding:12px 16px; text-align:right;">
+                {% if k.status == 'active' %}
+                  <form method="POST" action="{{ url_for('admin_revoke_api_key', key_id=k.id) }}" style="display:inline;" onsubmit="return confirm('Revoke this API key? External systems using it will lose access.');">
+                    <button type="submit" class="btn btn-danger btn-sm">Revoke Key</button>
+                  </form>
+                {% else %}
+                  <span style="font-size:.8rem; color:var(--text-dim);">Disabled</span>
+                {% endif %}
+              </td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      {% else %}
+        <div class="card" style="text-align:center; padding:3rem;">
+          <div style="font-size:2.5rem; margin-bottom:1rem;">🔑</div>
+          <p style="color:var(--text-muted);">No API keys generated yet. Use the form above to generate your first API key.</p>
+        </div>
+      {% endif %}
     </div>
 
   </div><!-- /container -->

@@ -13,7 +13,7 @@ from functools import wraps
 
 from flask import (
     Flask, render_template, request, redirect,
-    url_for, session, send_file, flash
+    url_for, session, send_file, flash, jsonify
 )
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
@@ -100,6 +100,29 @@ def role_required(*permitted_roles):
             return f(*args, **kwargs)
         return decorated
     return decorator
+
+
+def api_key_required(f):
+    """Decorator to require a valid API key via X-API-Key header or Bearer token."""
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        api_key = request.headers.get('X-API-Key')
+        if not api_key:
+            auth_header = request.headers.get('Authorization', '')
+            if auth_header.startswith('Bearer '):
+                api_key = auth_header.split('Bearer ', 1)[1].strip()
+
+        if not api_key:
+            api_key = request.args.get('api_key')
+
+        if not api_key or not db.validate_api_key(api_key):
+            return jsonify({
+                'error': 'Unauthorized',
+                'message': 'Invalid or missing API key. Provide header X-API-Key or Authorization: Bearer <key>.'
+            }), 401
+
+        return f(*args, **kwargs)
+    return decorated
 
 
 def generate_certificate_image(cert_data: dict, cert_id: str) -> str:
@@ -544,10 +567,32 @@ def admin_dashboard():
     admin_role = session.get('admin_role', 'superadmin')
     username   = session.get('admin_user', 'admin')
     totp_status = db.get_admin_2fa_status(username)
+    api_keys   = db.get_all_api_keys()
     return render_template('admin.html', logged_in=True,
                            certs=certs, logs=logs, stats=stats,
                            admin_role=admin_role, totp_status=totp_status,
-                           active_tab='overview')
+                           api_keys=api_keys, active_tab='overview')
+
+
+@app.route('/admin/api-keys/create', methods=['POST'])
+@role_required('superadmin')
+def admin_create_api_key():
+    key_name = request.form.get('key_name', '').strip()
+    if not key_name:
+        flash('API Key name is required.', 'error')
+        return redirect(url_for('admin_dashboard') + '?tab=apikeys')
+
+    new_key = db.generate_api_key(key_name)
+    flash(f'New API key created for "{key_name}": {new_key["api_key"]}', 'success')
+    return redirect(url_for('admin_dashboard') + '?tab=apikeys')
+
+
+@app.route('/admin/api-keys/revoke/<int:key_id>', methods=['POST'])
+@role_required('superadmin')
+def admin_revoke_api_key(key_id):
+    db.revoke_api_key(key_id)
+    flash('API key has been revoked.', 'warning')
+    return redirect(url_for('admin_dashboard') + '?tab=apikeys')
 
 
 @app.route('/admin/issue', methods=['POST'])
@@ -604,6 +649,180 @@ def admin_reactivate(cert_id):
 def admin_logout():
     session.clear()
     return redirect(url_for('admin'))
+
+
+# ─── RESTful API v1 Endpoints ─────────────────────────────────────────────────
+
+@app.route('/api/v1/health', methods=['GET'])
+def api_health():
+    """Public API health check endpoint."""
+    return jsonify({
+        'status': 'healthy',
+        'system': 'CertValid Enterprise API v1',
+        'timestamp': datetime.now().isoformat(sep=' ', timespec='seconds')
+    }), 200
+
+
+@app.route('/api/v1/verify/id', methods=['POST'])
+@api_key_required
+@limiter.limit("60 per minute")
+def api_verify_id():
+    """Verify certificate by ID via JSON payload."""
+    data = request.get_json(silent=True) or {}
+    cert_id = data.get('cert_id', '').strip().upper()
+    if not cert_id:
+        return jsonify({'error': 'Bad Request', 'message': 'Missing required parameter cert_id'}), 400
+
+    cert = db.get_certificate_by_id(cert_id)
+    ip   = request.remote_addr
+    pub_key_b64 = db.get_public_key_b64()
+
+    if not cert:
+        db.log_verification(cert_id, None, None, 'INVALID', 'API: ID not found', ip)
+        return jsonify({
+            'status': 'INVALID',
+            'valid': False,
+            'message': 'Certificate ID not found in registry',
+            'cert_id': cert_id
+        }), 404
+
+    payload = db.build_cert_payload(cert['cert_id'], cert['student_name'], cert['course_name'], cert['issue_date'], cert['file_hash'])
+    sig_valid = db.verify_payload_signature(payload, cert.get('signature', ''))
+
+    if cert['status'] == 'revoked':
+        db.log_verification(cert_id, None, None, 'REVOKED', 'API: Certificate revoked', ip)
+        return jsonify({
+            'status': 'REVOKED',
+            'valid': False,
+            'message': 'Certificate has been officially revoked',
+            'certificate': cert,
+            'signature_valid': sig_valid
+        }), 200
+
+    db.log_verification(cert_id, None, None, 'AUTHENTIC', 'API: Certificate verified', ip)
+    return jsonify({
+        'status': 'AUTHENTIC',
+        'valid': True,
+        'message': 'Certificate verified successfully',
+        'certificate': cert,
+        'signature_valid': sig_valid,
+        'public_key_b64': pub_key_b64
+    }), 200
+
+
+@app.route('/api/v1/verify/file', methods=['POST'])
+@api_key_required
+@limiter.limit("30 per minute")
+def api_verify_file():
+    """Verify certificate file upload via multipart/form-data."""
+    if 'certificate' not in request.files or request.files['certificate'].filename == '':
+        return jsonify({'error': 'Bad Request', 'message': 'No certificate file uploaded'}), 400
+
+    file = request.files['certificate']
+    if not allowed_file(file.filename):
+        return jsonify({'error': 'Unsupported Media Type', 'message': 'Allowed extensions: JPG, PNG, PDF'}), 415
+
+    file_bytes = file.read()
+    filename   = file.filename
+    ip         = request.remote_addr
+
+    computed_hash  = db.compute_file_hash(file_bytes)
+    computed_phash = db.compute_file_phash(file_bytes)
+    ocr_cert_id    = None
+
+    cert = db.get_certificate_by_hash(computed_hash)
+    match_type = 'exact'
+    similarity = 100.0
+
+    if not cert and computed_phash:
+        phash_match, dist, sim = db.get_certificate_by_phash(computed_phash, max_distance=10)
+        if phash_match:
+            cert = phash_match
+            match_type = 'visual'
+            similarity = sim
+
+    if not cert:
+        extracted_text = db.extract_text_from_file(file_bytes, filename)
+        ocr_cert_id = db.extract_cert_id_from_text(extracted_text)
+        if ocr_cert_id:
+            ocr_cert = db.get_certificate_by_id(ocr_cert_id)
+            if ocr_cert:
+                cert = ocr_cert
+                match_type = 'ocr'
+                similarity = 100.0
+
+    if not cert:
+        db.log_verification(None, filename, computed_hash, 'INVALID', 'API File: No match', ip)
+        return jsonify({
+            'status': 'INVALID',
+            'valid': False,
+            'message': 'No matching certificate found in registry by SHA-256, pHash, or OCR',
+            'computed_hash': computed_hash,
+            'computed_phash': computed_phash
+        }), 200
+
+    sig_valid = False
+    if cert and cert.get('signature'):
+        payload = db.build_cert_payload(cert['cert_id'], cert['student_name'], cert['course_name'], cert['issue_date'], cert['file_hash'])
+        sig_valid = db.verify_payload_signature(payload, cert['signature'])
+
+    status_str = 'REVOKED' if cert['status'] == 'revoked' else 'AUTHENTIC'
+    db.log_verification(cert['cert_id'], filename, computed_hash, status_str, f'API File verification ({match_type})', ip)
+
+    return jsonify({
+        'status': status_str,
+        'valid': (status_str == 'AUTHENTIC'),
+        'match_type': match_type,
+        'visual_similarity_percent': similarity,
+        'ocr_extracted_cert_id': ocr_cert_id,
+        'computed_hash': computed_hash,
+        'computed_phash': computed_phash,
+        'signature_valid': sig_valid,
+        'certificate': cert
+    }), 200
+
+
+@app.route('/api/v1/issue', methods=['POST'])
+@api_key_required
+@limiter.limit("20 per minute")
+def api_issue_certificate():
+    """Programmatically issue a certificate via JSON request."""
+    data = request.get_json(silent=True) or {}
+    student_name = data.get('student_name', '').strip()
+    course_name  = data.get('course_name', '').strip()
+    issue_date   = data.get('issue_date', '').strip()
+    issuer_name  = data.get('issuer_name', '').strip()
+
+    if not all([student_name, course_name, issue_date, issuer_name]):
+        return jsonify({
+            'error': 'Bad Request',
+            'message': 'Missing required fields: student_name, course_name, issue_date, issuer_name'
+        }), 400
+
+    unique_seed = f'{student_name}|{course_name}|{issue_date}|{issuer_name}|{uuid.uuid4()}'
+    file_hash   = hashlib.sha256(unique_seed.encode()).hexdigest()
+    cert_id     = db.add_certificate(student_name, course_name, issue_date, issuer_name, file_hash)
+
+    cert_data = {
+        'student_name': student_name,
+        'course_name':  course_name,
+        'issue_date':   issue_date,
+        'issuer_name':  issuer_name,
+        'file_hash':    file_hash,
+    }
+    try:
+        generate_certificate_image(cert_data, cert_id)
+    except Exception as e:
+        app.logger.error(f'API Image generation failed: {e}')
+
+    cert_record = db.get_certificate_by_id(cert_id)
+    return jsonify({
+        'status': 'SUCCESS',
+        'message': 'Certificate issued successfully',
+        'cert_id': cert_id,
+        'certificate': cert_record,
+        'download_url': f'{BASE_URL}/download/{cert_id}'
+    }), 201
 
 
 # ─── App Entry ────────────────────────────────────────────────────────────────
