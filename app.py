@@ -130,10 +130,52 @@ def api_key_required(f):
 def generate_certificate_image(cert_data: dict, cert_id: str) -> str:
     """
     Generate a certificate PNG image with embedded QR code.
+    Reads active visual theme (gold, emerald, navy, ruby, monochrome) from system settings.
     Computes and stores its perceptual hash (pHash) and uploads to S3 if configured.
     Returns the relative path (relative to static/) to the saved image.
     """
     W, H = 1100, 780
+
+    THEMES = {
+        'gold': {
+            'bg_start': (15, 15, 35),
+            'bg_end': (30, 20, 60),
+            'accent': (212, 175, 55),
+            'light': (180, 180, 210),
+            'white': (255, 255, 255),
+        },
+        'emerald': {
+            'bg_start': (10, 30, 25),
+            'bg_end': (20, 50, 45),
+            'accent': (16, 185, 129),
+            'light': (160, 210, 190),
+            'white': (255, 255, 255),
+        },
+        'navy': {
+            'bg_start': (15, 23, 42),
+            'bg_end': (30, 41, 59),
+            'accent': (59, 130, 246),
+            'light': (148, 163, 184),
+            'white': (255, 255, 255),
+        },
+        'ruby': {
+            'bg_start': (40, 10, 20),
+            'bg_end': (60, 20, 35),
+            'accent': (239, 68, 68),
+            'light': (220, 170, 180),
+            'white': (255, 255, 255),
+        },
+        'monochrome': {
+            'bg_start': (24, 24, 27),
+            'bg_end': (39, 39, 42),
+            'accent': (226, 232, 240),
+            'light': (161, 161, 170),
+            'white': (255, 255, 255),
+        }
+    }
+
+    theme_name = db.get_setting('cert_theme', 'gold')
+    p = THEMES.get(theme_name, THEMES['gold'])
 
     try:
         import numpy as np
@@ -141,15 +183,15 @@ def generate_certificate_image(cert_data: dict, cert_id: str) -> str:
         for i in range(H):
             ratio = i / H
             arr[i, :] = [
-                int(15 + 15 * ratio),
-                int(15 +  5 * ratio),
-                int(35 + 25 * ratio),
+                int(p['bg_start'][0] + (p['bg_end'][0] - p['bg_start'][0]) * ratio),
+                int(p['bg_start'][1] + (p['bg_end'][1] - p['bg_start'][1]) * ratio),
+                int(p['bg_start'][2] + (p['bg_end'][2] - p['bg_start'][2]) * ratio),
             ]
         img = Image.fromarray(arr, 'RGB')
     except ImportError:
-        img = Image.new('RGB', (W, H), color=(15, 15, 35))
-        top = Image.new('RGB', (W, H // 2), color=(15, 15, 35))
-        bot = Image.new('RGB', (W, H // 2), color=(30, 20, 60))
+        img = Image.new('RGB', (W, H), color=p['bg_start'])
+        top = Image.new('RGB', (W, H // 2), color=p['bg_start'])
+        bot = Image.new('RGB', (W, H // 2), color=p['bg_end'])
         img.paste(top, (0, 0))
         img.paste(bot, (0, H // 2))
 
@@ -157,9 +199,9 @@ def generate_certificate_image(cert_data: dict, cert_id: str) -> str:
 
     border = 18
     draw.rectangle([border, border, W - border, H - border],
-                   outline=(212, 175, 55), width=3)
+                   outline=p['accent'], width=3)
     draw.rectangle([border + 6, border + 6, W - border - 6, H - border - 6],
-                   outline=(212, 175, 55), width=1)
+                   outline=p['accent'], width=1)
 
     def try_font(size):
         for name in ['arialbd.ttf', 'Arial Bold.ttf', 'DejaVuSans-Bold.ttf', 'Arial.ttf']:
@@ -177,9 +219,9 @@ def generate_certificate_image(cert_data: dict, cert_id: str) -> str:
                 pass
         return ImageFont.load_default()
 
-    gold  = (212, 175, 55)
-    white = (255, 255, 255)
-    light = (180, 180, 210)
+    gold  = p['accent']
+    white = p['white']
+    light = p['light']
 
     draw.text((W // 2, 55), 'CERTIFICATE OF COMPLETION',
               fill=gold, font=try_font(38), anchor='mm')
@@ -571,11 +613,24 @@ def admin_dashboard():
     username   = session.get('admin_user', 'admin')
     totp_status = db.get_admin_2fa_status(username)
     api_keys   = db.get_all_api_keys()
+    current_theme = db.get_setting('cert_theme', 'gold')
     return render_template('admin.html', logged_in=True,
                            certs=certs, logs=logs, stats=stats,
                            admin_role=admin_role, totp_status=totp_status,
                            api_keys=api_keys, selected_status=status_filter,
+                           current_theme=current_theme,
                            active_tab='overview')
+
+
+@app.route('/admin/theme/select', methods=['POST'])
+@role_required('superadmin')
+def admin_select_theme():
+    """Select active visual certificate theme."""
+    theme = request.form.get('theme', 'gold').lower()
+    if theme in ['gold', 'emerald', 'navy', 'ruby', 'monochrome']:
+        db.set_setting('cert_theme', theme)
+        flash(f'Certificate visual theme updated to {theme.capitalize()}!', 'success')
+    return redirect(url_for('admin_dashboard') + '?tab=themes')
 
 
 @app.route('/admin/logs/export/csv', methods=['GET'])
