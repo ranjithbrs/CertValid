@@ -839,4 +839,107 @@ def set_setting(key: str, value: str):
     conn.close()
 
 
+# ─── Database Backup & Snapshot Helpers ──────────────────────────────────────
+
+def export_database_json() -> str:
+    """
+    Export full database contents to a structured JSON string with SHA-256 integrity checksum.
+    """
+    conn = get_db()
+    certs = [dict(r) for r in conn.execute("SELECT * FROM certificates ORDER BY id ASC").fetchall()]
+    logs  = [dict(r) for r in conn.execute("SELECT * FROM audit_logs ORDER BY id ASC").fetchall()]
+    keys  = [dict(r) for r in conn.execute("SELECT id, key_name, api_key, created_at, status FROM api_keys ORDER BY id ASC").fetchall()]
+    sets  = [dict(r) for r in conn.execute("SELECT * FROM system_settings ORDER BY key ASC").fetchall()]
+    conn.close()
+
+    payload = {
+        'certificates': certs,
+        'audit_logs': logs,
+        'api_keys': keys,
+        'system_settings': sets
+    }
+
+    serialized_data = json.dumps(payload, sort_keys=True)
+    checksum = hashlib.sha256(serialized_data.encode('utf-8')).hexdigest()
+
+    snapshot = {
+        'system': 'CertValid Enterprise Database Snapshot',
+        'version': '1.0',
+        'exported_at': datetime.now().isoformat(),
+        'record_counts': {
+            'certificates': len(certs),
+            'audit_logs': len(logs),
+            'api_keys': len(keys),
+            'system_settings': len(sets)
+        },
+        'checksum_sha256': checksum,
+        'data': payload
+    }
+    return json.dumps(snapshot, indent=2)
+
+
+def restore_database_json(snapshot_dict: dict) -> dict:
+    """
+    Validate and restore database snapshot from parsed JSON object.
+    Merges records safely into certificates, audit_logs, and system_settings.
+    """
+    if not isinstance(snapshot_dict, dict) or 'data' not in snapshot_dict or 'checksum_sha256' not in snapshot_dict:
+        return {'success': False, 'message': 'Invalid snapshot format: missing data or checksum.'}
+
+    data = snapshot_dict['data']
+    checksum_given = snapshot_dict['checksum_sha256']
+    serialized_data = json.dumps(data, sort_keys=True)
+    checksum_calc  = hashlib.sha256(serialized_data.encode('utf-8')).hexdigest()
+
+    if checksum_given != checksum_calc:
+        return {'success': False, 'message': 'Checksum Verification Failed! The snapshot file may be corrupted or altered.'}
+
+    conn = get_db()
+    c = conn.cursor()
+
+    restored_certs = 0
+    restored_logs = 0
+
+    # Restore Certificates
+    for cert in data.get('certificates', []):
+        c.execute('''
+            INSERT INTO certificates (cert_id, student_name, course_name, issue_date, issuer_name, file_hash, status, signature, phash)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(cert_id) DO UPDATE SET
+              student_name = excluded.student_name,
+              course_name  = excluded.course_name,
+              issue_date   = excluded.issue_date,
+              issuer_name  = excluded.issuer_name,
+              file_hash    = excluded.file_hash,
+              status       = excluded.status,
+              signature    = excluded.signature,
+              phash        = excluded.phash
+        ''', (
+            cert.get('cert_id'), cert.get('student_name'), cert.get('course_name'),
+            cert.get('issue_date'), cert.get('issuer_name'), cert.get('file_hash'),
+            cert.get('status', 'active'), cert.get('signature'), cert.get('phash')
+        ))
+        restored_certs += 1
+
+    # Restore Settings
+    for st in data.get('system_settings', []):
+        if st.get('key') and st.get('value'):
+            c.execute('''
+                INSERT INTO system_settings (key, value) VALUES (?, ?)
+                ON CONFLICT(key) DO UPDATE SET value = excluded.value
+            ''', (st['key'], st['value']))
+
+    conn.commit()
+    conn.close()
+
+    # Rebuild BK-Tree in memory
+    init_db()
+
+    return {
+        'success': True,
+        'message': f'Database restored successfully! Imported/merged {restored_certs} certificates.'
+    }
+
+
+
 

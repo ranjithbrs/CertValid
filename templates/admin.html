@@ -153,6 +153,7 @@
         <button class="admin-tab" id="tab-apikeys-btn"        onclick="showTab('apikeys')">🔑 API Keys</button>
         <button class="admin-tab" id="tab-themes-btn"         onclick="showTab('themes')">🎨 Themes</button>
         <button class="admin-tab" id="tab-notifications-btn"  onclick="showTab('notifications')">🔔 Notifications</button>
+        <button class="admin-tab" id="tab-backups-btn"        onclick="showTab('backups')">💾 Backups</button>
       {% endif %}
     </div>
 
@@ -289,8 +290,9 @@
               </td>
               <td>
                 <div style="display:flex; gap:.5rem; flex-wrap:wrap;">
-                  <a href="{{ url_for('verify_by_id', cert_id=cert.cert_id) }}" target="_blank" class="btn btn-ghost btn-sm">🔍</a>
-                  <a href="{{ url_for('download_cert', cert_id=cert.cert_id) }}" class="btn btn-ghost btn-sm">⬇️</a>
+                  <a href="{{ url_for('verify_by_id', cert_id=cert.cert_id) }}" target="_blank" class="btn btn-ghost btn-sm" title="Verify">🔍</a>
+                  <a href="{{ url_for('download_cert', cert_id=cert.cert_id) }}" class="btn btn-ghost btn-sm" title="Download PNG">⬇️</a>
+                  <a href="{{ url_for('cert_qr_badge', cert_id=cert.cert_id) }}" target="_blank" class="btn btn-ghost btn-sm" title="Branded QR Badge">📱 QR</a>
                   {% if admin_role == 'superadmin' %}
                     {% if cert.status == 'active' %}
                       <a href="{{ url_for('admin_revoke_confirm', cert_id=cert.cert_id) }}" class="btn btn-danger btn-sm">🚫 Revoke</a>
@@ -684,6 +686,50 @@
         <form method="POST" action="{{ url_for('admin_test_webhook') }}">
           <button type="submit" class="btn btn-ghost">⚡ Send Test Webhook Event</button>
         </form>
+      </div>
+    </div>
+
+    <!-- ── Backups & Snapshots Tab ── -->
+    <div class="admin-tab-pane" id="tab-backups" style="display:none;">
+      <div class="card" style="margin-bottom:1.5rem;">
+        <h3 style="margin-bottom:.5rem; font-size:1.1rem; display:flex; align-items:center; gap:.5rem;">
+          💾 Automated Database Snapshots & Backups
+        </h3>
+        <p style="color:var(--text-muted); font-size:.88rem; margin-bottom:1.5rem;">
+          Export and restore full database snapshots containing certificates, audit logs, API key registry, and system settings. Snapshots are secured with SHA-256 integrity checksums.
+        </p>
+
+        <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap:1.5rem;">
+          
+          <!-- Download Snapshot Card -->
+          <div style="background:var(--bg-card); border:1px solid var(--border-color); border-radius:8px; padding:1.25rem;">
+            <h4 style="font-size:1rem; color:var(--accent-gold); margin-bottom:.5rem;">📥 Export Full JSON Snapshot</h4>
+            <p style="font-size:.82rem; color:var(--text-muted); margin-bottom:1.25rem;">
+              Download a complete timestamped backup file of all database tables with SHA-256 verification hash.
+            </p>
+            <a href="{{ url_for('admin_backup_export') }}" class="btn btn-primary btn-full">
+              ⬇️ Download Database Backup (.json)
+            </a>
+          </div>
+
+          <!-- Restore Snapshot Card -->
+          <div style="background:var(--bg-card); border:1px solid var(--border-color); border-radius:8px; padding:1.25rem;">
+            <h4 style="font-size:1rem; color:var(--emerald-light); margin-bottom:.5rem;">📤 Upload & Restore Snapshot</h4>
+            <p style="font-size:.82rem; color:var(--text-muted); margin-bottom:1rem;">
+              Select a previously exported <code>.json</code> snapshot to restore or merge certificate registry records.
+            </p>
+
+            <form method="POST" action="{{ url_for('admin_backup_restore') }}" enctype="multipart/form-data">
+              <div class="form-group" style="margin-bottom:1rem;">
+                <input type="file" id="backup_file" name="backup_file" class="form-control" accept=".json" required>
+              </div>
+              <button type="submit" class="btn btn-success btn-full" onsubmit="return confirm('Restore database from this snapshot? Records will be safely merged.')">
+                🚀 Restore Database Snapshot
+              </button>
+            </form>
+          </div>
+
+        </div>
       </div>
     </div>
 

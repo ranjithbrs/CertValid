@@ -120,6 +120,27 @@
     </div>
     {% endif %}
 
+    <!-- Dynamic Branded QR Badge -->
+    {% if cert and cert.cert_id %}
+    <div class="card fade-in-up" style="animation-delay:.15s; margin-bottom:1.5rem; display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:1.5rem;">
+      <div style="display:flex; align-items:center; gap:1.25rem;">
+        <img src="{{ url_for('cert_qr_badge', cert_id=cert.cert_id) }}" alt="Branded QR Badge" style="width:110px; height:110px; border-radius:12px; border:2px solid var(--border-color); box-shadow:0 4px 14px rgba(0,0,0,0.3);">
+        <div>
+          <h3 style="font-size:1.05rem; margin-bottom:.25rem; color:var(--text-light);">📱 Branded Verification QR Badge</h3>
+          <p style="font-size:.85rem; color:var(--text-muted); margin-bottom:.5rem;">
+            Direct-scan emblem encoded with <code>Level-H</code> error correction and shield branding.
+          </p>
+          <span class="badge badge-authentic" style="font-size:.78rem;">🛡️ Tamper-Resistant Level-H QR</span>
+        </div>
+      </div>
+      <div>
+        <a href="{{ url_for('cert_qr_badge', cert_id=cert.cert_id) }}?download=1" class="btn btn-primary btn-sm">
+          ⬇️ Download High-Res QR Badge
+        </a>
+      </div>
+    </div>
+    {% endif %}
+
     <!-- Cryptographic & Perceptual Audit -->
     <div class="card fade-in-up" style="animation-delay:.2s; margin-bottom:1.5rem;">
       <div class="section-header">

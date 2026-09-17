@@ -129,6 +129,64 @@ def api_key_required(f):
     return decorated
 
 
+def generate_branded_qr(cert_id: str, theme: str = 'gold', size: int = 600) -> Image.Image:
+    """
+    Generate high-resolution branded QR code with theme colors and embedded center shield emblem.
+    Uses ERROR_CORRECT_H (30% error tolerance) for flawless scanning.
+    """
+    THEME_COLORS = {
+        'gold':       {'bg': (15, 15, 35),   'fg': (212, 175, 55),  'ring': (212, 175, 55)},
+        'emerald':    {'bg': (10, 30, 25),   'fg': (16, 185, 129),  'ring': (16, 185, 129)},
+        'navy':       {'bg': (15, 23, 42),   'fg': (59, 130, 246),  'ring': (59, 130, 246)},
+        'ruby':       {'bg': (40, 10, 20),   'fg': (239, 68, 68),   'ring': (239, 68, 68)},
+        'monochrome': {'bg': (24, 24, 27),   'fg': (226, 232, 240), 'ring': (226, 232, 240)},
+    }
+    palette = THEME_COLORS.get(theme.lower(), THEME_COLORS['gold'])
+
+    verify_url = f'{BASE_URL}/verify/{cert_id}'
+    qr = qrcode.QRCode(
+        version=None,
+        error_correction=qrcode.constants.ERROR_CORRECT_H,
+        box_size=16,
+        border=3,
+    )
+    qr.add_data(verify_url)
+    qr.make(fit=True)
+
+    qr_img = qr.make_image(fill_color=palette['fg'], back_color=palette['bg']).convert('RGBA')
+    qr_img = qr_img.resize((size, size), Image.LANCZOS)
+
+    # Center branding emblem badge
+    draw = ImageDraw.Draw(qr_img)
+    badge_radius = int(size * 0.12)
+    center_x = size // 2
+    center_y = size // 2
+
+    # Outer border circle
+    draw.ellipse(
+        [center_x - badge_radius - 5, center_y - badge_radius - 5,
+         center_x + badge_radius + 5, center_y + badge_radius + 5],
+        fill=palette['ring']
+    )
+    # Inner background circle
+    draw.ellipse(
+        [center_x - badge_radius, center_y - badge_radius,
+         center_x + badge_radius, center_y + badge_radius],
+        fill=palette['bg']
+    )
+
+    # Draw CV logo text in center
+    font_size = int(badge_radius * 1.1)
+    try:
+        font = ImageFont.truetype('arial.ttf', font_size)
+    except Exception:
+        font = ImageFont.load_default()
+
+    draw.text((center_x, center_y), 'CV', fill=palette['fg'], font=font, anchor='mm')
+
+    return qr_img.convert('RGB')
+
+
 def generate_certificate_image(cert_data: dict, cert_id: str) -> str:
     """
     Generate a certificate PNG image with embedded QR code.
@@ -249,11 +307,7 @@ def generate_certificate_image(cert_data: dict, cert_id: str) -> str:
 
     draw.line([(80, 530), (W - 80, 530)], fill=gold, width=1)
 
-    verify_url = f'{BASE_URL}/verify/{cert_id}'
-    qr = qrcode.QRCode(version=1, box_size=6, border=2)
-    qr.add_data(verify_url)
-    qr.make(fit=True)
-    qr_img = qr.make_image(fill_color='black', back_color='white').convert('RGB')
+    qr_img = generate_branded_qr(cert_id, theme=theme_name, size=300)
     qr_size = 150
     qr_img = qr_img.resize((qr_size, qr_size), Image.LANCZOS)
     qr_x = W // 2 - qr_size // 2
@@ -283,6 +337,31 @@ def generate_certificate_image(cert_data: dict, cert_id: str) -> str:
         app.logger.error(f'Failed to compute/update pHash for {cert_id}: {e}')
 
     return f'certs/{filename}'
+
+
+@app.route('/qr/<cert_id>')
+def cert_qr_badge(cert_id):
+    """Serve dynamic high-resolution branded QR code image or attachment download."""
+    cert_id = cert_id.strip().upper()
+    cert = db.get_certificate_by_id(cert_id)
+    if not cert:
+        return jsonify({'error': 'Certificate not found'}), 404
+
+    theme = request.args.get('theme') or db.get_setting('cert_theme', 'gold')
+    qr_img = generate_branded_qr(cert_id, theme=theme, size=600)
+
+    buf = io.BytesIO()
+    qr_img.save(buf, format='PNG')
+    buf.seek(0)
+
+    is_download = request.args.get('download', '').lower() in ['1', 'true', 'yes']
+    return send_file(
+        buf,
+        mimetype='image/png',
+        as_attachment=is_download,
+        download_name=f'CertValid_QR_{cert_id}_{theme}.png'
+    )
+
 
 
 # ─── Error Handlers ──────────────────────────────────────────────────────────
@@ -686,6 +765,51 @@ def admin_test_webhook():
     })
     flash('Test Webhook notification triggered asynchronously!', 'info')
     return redirect(url_for('admin_dashboard') + '?tab=notifications')
+
+
+@app.route('/admin/backup/export', methods=['GET'])
+@role_required('superadmin')
+def admin_backup_export():
+    """Export and stream full database JSON snapshot."""
+    snapshot_json = db.export_database_json()
+    today_str = datetime.now().strftime('%Y%m%d_%H%M%S')
+    filename  = f"CertValid_Database_Backup_{today_str}.json"
+
+    response = make_response(snapshot_json)
+    response.headers["Content-Disposition"] = f"attachment; filename={filename}"
+    response.headers["Content-Type"] = "application/json"
+    return response
+
+
+@app.route('/admin/backup/restore', methods=['POST'])
+@role_required('superadmin')
+def admin_backup_restore():
+    """Restore database from uploaded JSON snapshot file."""
+    if 'backup_file' not in request.files or request.files['backup_file'].filename == '':
+        flash('No snapshot file selected for restoration.', 'error')
+        return redirect(url_for('admin_dashboard') + '?tab=backups')
+
+    file = request.files['backup_file']
+    if not file.filename.lower().endswith('.json'):
+        flash('Invalid snapshot file type. Please upload a .json backup file.', 'error')
+        return redirect(url_for('admin_dashboard') + '?tab=backups')
+
+    try:
+        content = file.read().decode('utf-8')
+        snapshot_dict = json.loads(content)
+        result = db.restore_database_json(snapshot_dict)
+
+        if result.get('success'):
+            flash(result['message'], 'success')
+        else:
+            flash(f"Restoration Failed: {result.get('message')}", 'error')
+
+    except Exception as e:
+        app.logger.error(f'Database restoration exception: {e}')
+        flash('Failed to process JSON snapshot file. Corrupt JSON syntax.', 'error')
+
+    return redirect(url_for('admin_dashboard') + '?tab=backups')
+
 
 
 
