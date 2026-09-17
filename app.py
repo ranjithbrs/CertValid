@@ -45,6 +45,9 @@ limiter = Limiter(
     storage_uri="memory://"
 )
 
+# Initialize database schema, migrations, and Ed25519 keys on app load (WSGI compatible)
+db.init_db()
+
 UPLOAD_FOLDER = os.path.join(os.path.dirname(__file__), 'static', 'uploads')
 CERT_FOLDER   = os.path.join(os.path.dirname(__file__), 'static', 'certs')
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
@@ -540,6 +543,5 @@ def admin_logout():
 # ─── App Entry ────────────────────────────────────────────────────────────────
 
 if __name__ == '__main__':
-    db.init_db()
     debug_mode = os.environ.get('FLASK_DEBUG', 'false').lower() == 'true'
     app.run(debug=debug_mode)
