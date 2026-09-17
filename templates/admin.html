@@ -150,6 +150,7 @@
       <button class="admin-tab" id="tab-security-btn" onclick="showTab('security')">🔐 Security (2FA)</button>
       {% if admin_role == 'superadmin' %}
         <button class="admin-tab" id="tab-apikeys-btn"  onclick="showTab('apikeys')">🔑 API Keys</button>
+        <button class="admin-tab" id="tab-themes-btn"   onclick="showTab('themes')">🎨 Themes</button>
       {% endif %}
     </div>
 
@@ -467,6 +468,87 @@
           <p style="color:var(--text-muted);">No API keys generated yet. Use the form above to generate your first API key.</p>
         </div>
       {% endif %}
+    </div>
+
+    <!-- ── Themes Tab ── -->
+    <div class="admin-tab-pane" id="tab-themes" style="display:none;">
+      <div class="card" style="margin-bottom:1.5rem;">
+        <h3 style="margin-bottom:.5rem; font-size:1.1rem; display:flex; align-items:center; gap:.5rem;">
+          🎨 Certificate Visual Template Customizer
+        </h3>
+        <p style="color:var(--text-muted); font-size:.88rem; margin-bottom:1.5rem;">
+          Choose the active visual color theme applied to all newly issued certificates.
+        </p>
+
+        <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap:1.25rem;">
+          
+          <!-- Royal Gold -->
+          <form method="POST" action="{{ url_for('admin_select_theme') }}" class="card" style="padding:1.25rem; text-align:center; border:2px solid {% if not current_theme or current_theme == 'gold' %}var(--accent-gold){% else %}transparent{% endif %};">
+            <input type="hidden" name="theme" value="gold">
+            <div style="height:48px; border-radius:8px; background:linear-gradient(135deg, #0f0f23, #1e143c); border:2px solid #d4af37; margin-bottom:1rem; display:flex; align-items:center; justify-content:center; color:#d4af37; font-weight:bold;">
+              👑 Royal Gold
+            </div>
+            {% if not current_theme or current_theme == 'gold' %}
+              <button type="button" class="btn btn-sm btn-primary" disabled style="width:100%;">Active Theme</button>
+            {% else %}
+              <button type="submit" class="btn btn-sm btn-ghost" style="width:100%;">Select Theme</button>
+            {% endif %}
+          </form>
+
+          <!-- Emerald Elite -->
+          <form method="POST" action="{{ url_for('admin_select_theme') }}" class="card" style="padding:1.25rem; text-align:center; border:2px solid {% if current_theme == 'emerald' %}var(--emerald){% else %}transparent{% endif %};">
+            <input type="hidden" name="theme" value="emerald">
+            <div style="height:48px; border-radius:8px; background:linear-gradient(135deg, #0a1e19, #14322d); border:2px solid #10b981; margin-bottom:1rem; display:flex; align-items:center; justify-content:center; color:#10b981; font-weight:bold;">
+              🌿 Emerald Elite
+            </div>
+            {% if current_theme == 'emerald' %}
+              <button type="button" class="btn btn-sm btn-primary" disabled style="width:100%;">Active Theme</button>
+            {% else %}
+              <button type="submit" class="btn btn-sm btn-ghost" style="width:100%;">Select Theme</button>
+            {% endif %}
+          </form>
+
+          <!-- Classic Navy -->
+          <form method="POST" action="{{ url_for('admin_select_theme') }}" class="card" style="padding:1.25rem; text-align:center; border:2px solid {% if current_theme == 'navy' %}#3b82f6{% else %}transparent{% endif %};">
+            <input type="hidden" name="theme" value="navy">
+            <div style="height:48px; border-radius:8px; background:linear-gradient(135deg, #0f172a, #1e293b); border:2px solid #3b82f6; margin-bottom:1rem; display:flex; align-items:center; justify-content:center; color:#60a5fa; font-weight:bold;">
+              ⚓ Classic Navy
+            </div>
+            {% if current_theme == 'navy' %}
+              <button type="button" class="btn btn-sm btn-primary" disabled style="width:100%;">Active Theme</button>
+            {% else %}
+              <button type="submit" class="btn btn-sm btn-ghost" style="width:100%;">Select Theme</button>
+            {% endif %}
+          </form>
+
+          <!-- Crimson Ruby -->
+          <form method="POST" action="{{ url_for('admin_select_theme') }}" class="card" style="padding:1.25rem; text-align:center; border:2px solid {% if current_theme == 'ruby' %}var(--red){% else %}transparent{% endif %};">
+            <input type="hidden" name="theme" value="ruby">
+            <div style="height:48px; border-radius:8px; background:linear-gradient(135deg, #280a14, #3c1423); border:2px solid #ef4444; margin-bottom:1rem; display:flex; align-items:center; justify-content:center; color:#f87171; font-weight:bold;">
+              💎 Crimson Ruby
+            </div>
+            {% if current_theme == 'ruby' %}
+              <button type="button" class="btn btn-sm btn-primary" disabled style="width:100%;">Active Theme</button>
+            {% else %}
+              <button type="submit" class="btn btn-sm btn-ghost" style="width:100%;">Select Theme</button>
+            {% endif %}
+          </form>
+
+          <!-- Platinum Monochrome -->
+          <form method="POST" action="{{ url_for('admin_select_theme') }}" class="card" style="padding:1.25rem; text-align:center; border:2px solid {% if current_theme == 'monochrome' %}#e2e8f0{% else %}transparent{% endif %};">
+            <input type="hidden" name="theme" value="monochrome">
+            <div style="height:48px; border-radius:8px; background:linear-gradient(135deg, #18181b, #27272a); border:2px solid #e2e8f0; margin-bottom:1rem; display:flex; align-items:center; justify-content:center; color:#cbd5e1; font-weight:bold;">
+              ⚙️ Platinum Silver
+            </div>
+            {% if current_theme == 'monochrome' %}
+              <button type="button" class="btn btn-sm btn-primary" disabled style="width:100%;">Active Theme</button>
+            {% else %}
+              <button type="submit" class="btn btn-sm btn-ghost" style="width:100%;">Select Theme</button>
+            {% endif %}
+          </form>
+
+        </div>
+      </div>
     </div>
 
   </div><!-- /container -->

@@ -240,6 +240,14 @@ def init_db():
         )
     ''')
 
+    # System Settings key-value table
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS system_settings (
+            key TEXT UNIQUE NOT NULL,
+            value TEXT NOT NULL
+        )
+    ''')
+
     # Seed default admin with secure PBKDF2 hash & superadmin role
     existing_admin = c.execute(
         'SELECT id FROM admin_users WHERE username = ?', ('admin',)
@@ -806,5 +814,29 @@ def revoke_api_key(key_id: int):
     conn.execute("UPDATE api_keys SET status = 'revoked' WHERE id = ?", (key_id,))
     conn.commit()
     conn.close()
+
+
+# ─── System Settings Helpers ─────────────────────────────────────────────────
+
+def get_setting(key: str, default: str = None) -> str:
+    """Get a system setting by key."""
+    conn = get_db()
+    row = conn.execute("SELECT value FROM system_settings WHERE key = ?", (key,)).fetchone()
+    conn.close()
+    if row:
+        return dict(row).get('value')
+    return default
+
+
+def set_setting(key: str, value: str):
+    """Insert or update a system setting by key."""
+    conn = get_db()
+    conn.execute(
+        "INSERT INTO system_settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = ?",
+        (key, value, value)
+    )
+    conn.commit()
+    conn.close()
+
 
 
