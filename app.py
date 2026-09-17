@@ -688,6 +688,51 @@ def admin_test_webhook():
     return redirect(url_for('admin_dashboard') + '?tab=notifications')
 
 
+@app.route('/admin/backup/export', methods=['GET'])
+@role_required('superadmin')
+def admin_backup_export():
+    """Export and stream full database JSON snapshot."""
+    snapshot_json = db.export_database_json()
+    today_str = datetime.now().strftime('%Y%m%d_%H%M%S')
+    filename  = f"CertValid_Database_Backup_{today_str}.json"
+
+    response = make_response(snapshot_json)
+    response.headers["Content-Disposition"] = f"attachment; filename={filename}"
+    response.headers["Content-Type"] = "application/json"
+    return response
+
+
+@app.route('/admin/backup/restore', methods=['POST'])
+@role_required('superadmin')
+def admin_backup_restore():
+    """Restore database from uploaded JSON snapshot file."""
+    if 'backup_file' not in request.files or request.files['backup_file'].filename == '':
+        flash('No snapshot file selected for restoration.', 'error')
+        return redirect(url_for('admin_dashboard') + '?tab=backups')
+
+    file = request.files['backup_file']
+    if not file.filename.lower().endswith('.json'):
+        flash('Invalid snapshot file type. Please upload a .json backup file.', 'error')
+        return redirect(url_for('admin_dashboard') + '?tab=backups')
+
+    try:
+        content = file.read().decode('utf-8')
+        snapshot_dict = json.loads(content)
+        result = db.restore_database_json(snapshot_dict)
+
+        if result.get('success'):
+            flash(result['message'], 'success')
+        else:
+            flash(f"Restoration Failed: {result.get('message')}", 'error')
+
+    except Exception as e:
+        app.logger.error(f'Database restoration exception: {e}')
+        flash('Failed to process JSON snapshot file. Corrupt JSON syntax.', 'error')
+
+    return redirect(url_for('admin_dashboard') + '?tab=backups')
+
+
+
 
 @app.route('/admin/logs/export/csv', methods=['GET'])
 @login_required
