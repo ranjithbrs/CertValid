@@ -301,6 +301,9 @@ def init_db():
     conn.commit()
     conn.close()
 
+    # Rebuild BK-Tree in-memory metric index on DB init
+    rebuild_bktree_index()
+
 
 # ─── Cert ID Generator ────────────────────────────────────────────────────────
 
@@ -393,12 +396,114 @@ def add_certificate(student_name, course_name, issue_date, issuer_name, file_has
     return cert_id
 
 
+# ─── Burkhard-Keller (BK-Tree) Metric Tree Data Structure ─────────────────────
+
+class BKNode:
+    """Node in a Burkhard-Keller metric tree for fast pHash Hamming distance search."""
+    def __init__(self, cert_id: str, phash_str: str, hash_obj):
+        self.cert_id = cert_id
+        self.phash_str = phash_str
+        self.hash_obj = hash_obj
+        self.children = {}  # distance (int) -> BKNode
+
+
+class BKTree:
+    """Burkhard-Keller metric tree for O(log N) visual similarity search."""
+    def __init__(self):
+        self.root = None
+        self.count = 0
+
+    def insert(self, cert_id: str, phash_str: str) -> bool:
+        if not phash_str:
+            return False
+        try:
+            hash_obj = imagehash.hex_to_hash(phash_str)
+        except Exception:
+            return False
+
+        if self.root is None:
+            self.root = BKNode(cert_id, phash_str, hash_obj)
+            self.count += 1
+            return True
+
+        curr = self.root
+        while curr:
+            dist = curr.hash_obj - hash_obj
+            if dist == 0 and curr.cert_id == cert_id:
+                return False
+            if dist in curr.children:
+                curr = curr.children[dist]
+            else:
+                curr.children[dist] = BKNode(cert_id, phash_str, hash_obj)
+                self.count += 1
+                return True
+
+    def search(self, target_phash_str: str, max_distance: int = 10):
+        """
+        Search BK-Tree for nearest neighbor within max_distance bits.
+        Uses triangle inequality subtree pruning: low = dist - max_distance, high = dist + max_distance.
+        Returns (best_cert_id, min_distance).
+        """
+        if self.root is None or not target_phash_str:
+            return None, None
+
+        try:
+            target_hash = imagehash.hex_to_hash(target_phash_str)
+        except Exception:
+            return None, None
+
+        candidates = [self.root]
+        best_cert_id = None
+        min_dist = max_distance + 1
+
+        while candidates:
+            node = candidates.pop()
+            dist = node.hash_obj - target_hash
+
+            if dist < min_dist:
+                min_dist = dist
+                best_cert_id = node.cert_id
+
+            low = dist - max_distance
+            high = dist + max_distance
+
+            for d, child in node.children.items():
+                if low <= d <= high:
+                    candidates.append(child)
+
+        if best_cert_id and min_dist <= max_distance:
+            return best_cert_id, min_dist
+        return None, None
+
+
+_bktree_index = BKTree()
+
+
+def rebuild_bktree_index() -> int:
+    """Build or rebuild the in-memory BK-Tree index from all active registered certificate pHashes."""
+    global _bktree_index
+    new_tree = BKTree()
+    conn = get_db()
+    rows = conn.execute(
+        "SELECT cert_id, phash FROM certificates WHERE phash IS NOT NULL AND phash != ''"
+    ).fetchall()
+    conn.close()
+
+    for r in rows:
+        new_tree.insert(r['cert_id'], r['phash'])
+
+    _bktree_index = new_tree
+    return _bktree_index.count
+
+
 def update_certificate_phash(cert_id, phash):
-    """Update the pHash field for a certificate record."""
+    """Update the pHash field for a certificate record and insert into BK-Tree index."""
     conn = get_db()
     conn.execute("UPDATE certificates SET phash = ? WHERE cert_id = ?", (phash, cert_id))
     conn.commit()
     conn.close()
+    if phash:
+        _bktree_index.insert(cert_id, phash)
 
 
 def get_certificate_by_id(cert_id):
@@ -419,40 +524,22 @@ def get_certificate_by_hash(file_hash):
 
 def get_certificate_by_phash(uploaded_phash_str, max_distance=10):
     """
-    Match an uploaded image's pHash against all active registered certificates using Hamming distance.
+    Match an uploaded image's pHash against registered certificates using O(log N) BK-Tree metric search.
     Threshold max_distance = 10 bits out of 64 (>= 84.4% visual similarity).
     Returns (certificate_dict, distance, similarity_percent) or (None, None, 0.0).
     """
     if not uploaded_phash_str:
         return None, None, 0.0
 
-    try:
-        target_hash = imagehash.hex_to_hash(uploaded_phash_str)
-    except Exception:
-        return None, None, 0.0
+    if _bktree_index.root is None:
+        rebuild_bktree_index()
 
-    conn = get_db()
-    rows = conn.execute(
-        "SELECT * FROM certificates WHERE phash IS NOT NULL AND phash != ''"
-    ).fetchall()
-    conn.close()
-
-    best_match = None
-    min_dist = 999
-
-    for r in rows:
-        try:
-            h = imagehash.hex_to_hash(r['phash'])
-            dist = target_hash - h
-            if dist < min_dist:
-                min_dist = dist
-                best_match = dict(r)
-        except Exception:
-            continue
-
-    if best_match and min_dist <= max_distance:
-        similarity = round((1.0 - (min_dist / 64.0)) * 100, 1)
-        return best_match, min_dist, similarity
+    matched_cert_id, dist = _bktree_index.search(uploaded_phash_str, max_distance=max_distance)
+    if matched_cert_id and dist is not None:
+        cert = get_certificate_by_id(matched_cert_id)
+        if cert:
+            similarity = round((1.0 - (dist / 64.0)) * 100, 1)
+            return cert, dist, similarity
 
     return None, None, 0.0
 
