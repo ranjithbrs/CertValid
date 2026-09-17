@@ -59,6 +59,17 @@
           </span>
         </div>
       </div>
+    {% elif status_upper == 'EXPIRED' %}
+      <div class="result-hero revoked fade-in-up" style="border-color:#f59e0b; background:rgba(245,158,11,0.08);">
+        <div class="result-icon">⏳</div>
+        <div class="result-title" style="color: #fbbf24;">Certificate Expired</div>
+        <p class="result-reason">{{ reason }}</p>
+        <div style="margin-top:1rem;">
+          <span class="badge" style="background:rgba(245,158,11,0.25); color:#fbbf24; border:1px solid #f59e0b;">
+            <span class="pulse-dot pulse-amber"></span> EXPIRED
+          </span>
+        </div>
+      </div>
     {% else %}
       <div class="result-hero invalid fade-in-up">
         <div class="result-icon">❌</div>
@@ -78,9 +89,14 @@
       <div class="section-header">
         <span class="section-title">📋 Certificate Details</span>
         {% if status_upper == 'AUTHENTIC' and cert.cert_id %}
-          <a href="{{ url_for('download_cert', cert_id=cert.cert_id) }}" class="btn btn-success btn-sm">
-            ⬇️ Download Certificate
-          </a>
+          <div style="display:flex; gap:.5rem; flex-wrap:wrap;">
+            <a href="{{ url_for('download_cert', cert_id=cert.cert_id) }}" class="btn btn-ghost btn-sm">
+              ⬇️ Download PNG
+            </a>
+            <a href="{{ url_for('download_cert_pdf', cert_id=cert.cert_id) }}" class="btn btn-success btn-sm">
+              📄 Download Official PDF
+            </a>
+          </div>
         {% endif %}
       </div>
       <div class="info-grid">
@@ -107,12 +123,28 @@
           <div class="info-card-value">{{ cert.issue_date }}</div>
         </div>
         <div class="info-card">
+          <div class="info-card-label">Validity Period</div>
+          <div class="info-card-value">
+            {% if cert.expires_at %}
+              {% if cert.is_expired or cert.effective_status == 'expired' %}
+                <span style="color:#fbbf24; font-weight:600;">Expired on {{ cert.expires_at }}</span>
+              {% else %}
+                <span>Valid until {{ cert.expires_at }} ({{ cert.days_until_expiry }} days left)</span>
+              {% endif %}
+            {% else %}
+              <span style="color:var(--emerald-light);">Permanent / Lifetime Validity</span>
+            {% endif %}
+          </div>
+        </div>
+        <div class="info-card">
           <div class="info-card-label">Certificate Status</div>
           <div class="info-card-value">
-            {% if cert.status == 'active' %}
-              <span class="badge badge-active">Active</span>
+            {% if cert.status == 'revoked' %}
+              <span class="badge badge-revoked">Revoked</span>
+            {% elif cert.is_expired or cert.effective_status == 'expired' %}
+              <span class="badge" style="background:rgba(245,158,11,0.2); color:#fbbf24; border:1px solid #f59e0b;">Expired</span>
             {% else %}
-              <span class="badge badge-revoked">{{ cert.status | title }}</span>
+              <span class="badge badge-active">Active</span>
             {% endif %}
           </div>
         </div>

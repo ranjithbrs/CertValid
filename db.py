@@ -171,7 +171,8 @@ def init_db():
             phash TEXT,
             signature TEXT,
             status TEXT NOT NULL DEFAULT 'active',
-            created_at TEXT NOT NULL
+            created_at TEXT NOT NULL,
+            expires_at TEXT
         )
     ''')
 
@@ -183,6 +184,8 @@ def init_db():
             c.execute("ALTER TABLE certificates ADD COLUMN phash TEXT")
         if 'signature' not in columns:
             c.execute("ALTER TABLE certificates ADD COLUMN signature TEXT")
+        if 'expires_at' not in columns:
+            c.execute("ALTER TABLE certificates ADD COLUMN expires_at TEXT")
     except Exception:
         pass
 
@@ -386,7 +389,46 @@ def extract_cert_id_from_text(text: str) -> str:
 
 # ─── Certificate CRUD ────────────────────────────────────────────────────────
 
-def add_certificate(student_name, course_name, issue_date, issuer_name, file_hash, phash=None):
+def check_cert_expiry(cert: dict) -> dict:
+    """
+    Enrich certificate dictionary with dynamic expiration calculations:
+    is_expired (bool), days_until_expiry (int or None), effective_status ('active'|'revoked'|'expired')
+    """
+    if not cert:
+        return cert
+
+    cert_copy = dict(cert)
+    expires_at = cert_copy.get('expires_at')
+    status = cert_copy.get('status', 'active')
+
+    if not expires_at:
+        cert_copy['is_expired'] = False
+        cert_copy['days_until_expiry'] = None
+        cert_copy['effective_status'] = status
+        return cert_copy
+
+    try:
+        exp_date = datetime.strptime(expires_at.strip(), '%Y-%m-%d').date()
+        today = datetime.now().date()
+        days_remaining = (exp_date - today).days
+
+        if days_remaining < 0:
+            cert_copy['is_expired'] = True
+            cert_copy['days_until_expiry'] = days_remaining
+            cert_copy['effective_status'] = 'expired' if status == 'active' else status
+        else:
+            cert_copy['is_expired'] = False
+            cert_copy['days_until_expiry'] = days_remaining
+            cert_copy['effective_status'] = status
+    except Exception:
+        cert_copy['is_expired'] = False
+        cert_copy['days_until_expiry'] = None
+        cert_copy['effective_status'] = status
+
+    return cert_copy
+
+
+def add_certificate(student_name, course_name, issue_date, issuer_name, file_hash, phash=None, expires_at=None):
     """Insert a new certificate record with Ed25519 digital signature. Returns the generated cert_id."""
     cert_id = generate_cert_id()
     payload = build_cert_payload(cert_id, student_name, course_name, issue_date, file_hash)
@@ -396,9 +438,9 @@ def add_certificate(student_name, course_name, issue_date, issuer_name, file_has
     conn = get_db()
     conn.execute('''
         INSERT INTO certificates
-        (cert_id, student_name, course_name, issue_date, issuer_name, file_hash, phash, signature, status, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'active', ?)
-    ''', (cert_id, student_name, course_name, issue_date, issuer_name, file_hash, phash, signature, now))
+        (cert_id, student_name, course_name, issue_date, issuer_name, file_hash, phash, signature, status, created_at, expires_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?)
+    ''', (cert_id, student_name, course_name, issue_date, issuer_name, file_hash, phash, signature, now, expires_at))
     conn.commit()
     conn.close()
     return cert_id
@@ -519,7 +561,7 @@ def get_certificate_by_id(cert_id):
     conn = get_db()
     row = conn.execute('SELECT * FROM certificates WHERE cert_id = ?', (cert_id,)).fetchone()
     conn.close()
-    return dict(row) if row else None
+    return check_cert_expiry(dict(row)) if row else None
 
 
 def get_certificate_by_hash(file_hash):
@@ -527,7 +569,7 @@ def get_certificate_by_hash(file_hash):
     conn = get_db()
     row = conn.execute('SELECT * FROM certificates WHERE file_hash = ?', (file_hash,)).fetchone()
     conn.close()
-    return dict(row) if row else None
+    return check_cert_expiry(dict(row)) if row else None
 
 
 def get_certificate_by_phash(uploaded_phash_str, max_distance=10):
@@ -553,11 +595,11 @@ def get_certificate_by_phash(uploaded_phash_str, max_distance=10):
 
 
 def get_all_certificates():
-    """Fetch all certificates ordered by creation date descending."""
+    """Fetch all certificates ordered by creation date descending with expiry calculations."""
     conn = get_db()
     rows = conn.execute('SELECT * FROM certificates ORDER BY created_at DESC').fetchall()
     conn.close()
-    return [dict(r) for r in rows]
+    return [check_cert_expiry(dict(r)) for r in rows]
 
 
 def revoke_certificate(cert_id):
@@ -903,8 +945,8 @@ def restore_database_json(snapshot_dict: dict) -> dict:
     # Restore Certificates
     for cert in data.get('certificates', []):
         c.execute('''
-            INSERT INTO certificates (cert_id, student_name, course_name, issue_date, issuer_name, file_hash, status, signature, phash)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO certificates (cert_id, student_name, course_name, issue_date, issuer_name, file_hash, status, signature, phash, expires_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(cert_id) DO UPDATE SET
               student_name = excluded.student_name,
               course_name  = excluded.course_name,
@@ -913,11 +955,13 @@ def restore_database_json(snapshot_dict: dict) -> dict:
               file_hash    = excluded.file_hash,
               status       = excluded.status,
               signature    = excluded.signature,
-              phash        = excluded.phash
+              phash        = excluded.phash,
+              expires_at   = excluded.expires_at
         ''', (
             cert.get('cert_id'), cert.get('student_name'), cert.get('course_name'),
             cert.get('issue_date'), cert.get('issuer_name'), cert.get('file_hash'),
-            cert.get('status', 'active'), cert.get('signature'), cert.get('phash')
+            cert.get('status', 'active'), cert.get('signature'), cert.get('phash'),
+            cert.get('expires_at')
         ))
         restored_certs += 1
 
