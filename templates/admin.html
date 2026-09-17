@@ -154,6 +154,7 @@
         <button class="admin-tab" id="tab-themes-btn"         onclick="showTab('themes')">🎨 Themes</button>
         <button class="admin-tab" id="tab-notifications-btn"  onclick="showTab('notifications')">🔔 Notifications</button>
         <button class="admin-tab" id="tab-backups-btn"        onclick="showTab('backups')">💾 Backups</button>
+        <button class="admin-tab" id="tab-merkle-btn"         onclick="showTab('merkle')">⛓️ Merkle Tree</button>
       {% endif %}
     </div>
 
@@ -729,6 +730,62 @@
             </form>
           </div>
 
+        </div>
+      </div>
+    </div>
+
+    <!-- ── Merkle Tree Cryptographic Batch Explorer Tab ── -->
+    <div class="admin-tab-pane" id="tab-merkle" style="display:none;">
+      <div class="card" style="margin-bottom:1.5rem;">
+        <h3 style="margin-bottom:.5rem; font-size:1.1rem; display:flex; align-items:center; gap:.5rem;">
+          ⛓️ Merkle Tree Cryptographic Batch Explorer
+        </h3>
+        <p style="color:var(--text-muted); font-size:.88rem; margin-bottom:1.5rem;">
+          Cryptographic Merkle tree built recursively over all issued certificates. Any modification to a single certificate alters the global Root Hash, providing mathematical tamper evidence.
+        </p>
+
+        <!-- Merkle Root Banner -->
+        <div style="background:var(--bg-card); border:1px solid var(--border-color); border-radius:10px; padding:1.25rem; margin-bottom:1.5rem;">
+          <div style="font-size:.85rem; color:var(--text-muted); margin-bottom:.5rem; text-transform:uppercase; letter-spacing:1px; font-weight:600;">
+            Global Merkle Root Hash (SHA-256)
+          </div>
+          <div style="display:flex; align-items:center; gap:1rem; flex-wrap:wrap;">
+            <code style="flex:1; background:rgba(0,0,0,0.4); padding:10px 14px; border-radius:6px; font-size:.9rem; color:var(--accent-gold); font-family:monospace; word-break:break-all; border:1px solid rgba(212,175,55,0.3);">
+              {{ merkle_meta.root if merkle_meta else 'Pending Generation' }}
+            </code>
+            <button type="button" class="btn btn-ghost btn-sm" onclick="navigator.clipboard.writeText('{{ merkle_meta.root if merkle_meta else '' }}'); alert('Merkle Root copied to clipboard!');">
+              📋 Copy Root
+            </button>
+          </div>
+        </div>
+
+        <!-- Tree Metrics Grid -->
+        <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap:1rem; margin-bottom:1.5rem;">
+          <div class="stat-card" style="padding:1rem;">
+            <div class="stat-value" style="font-size:1.5rem;">{{ merkle_meta.leaf_count if merkle_meta else 0 }}</div>
+            <div class="stat-label">Total Leaves (Certs)</div>
+          </div>
+          <div class="stat-card" style="padding:1rem;">
+            <div class="stat-value" style="font-size:1.5rem; color:var(--emerald-light);">{{ merkle_meta.depth if merkle_meta else 0 }}</div>
+            <div class="stat-label">Tree Depth (Levels)</div>
+          </div>
+          <div class="stat-card" style="padding:1rem;">
+            <div class="stat-value" style="font-size:1.5rem; color:var(--indigo-light);">Binary SHA-256</div>
+            <div class="stat-label">Tree Architecture</div>
+          </div>
+        </div>
+
+        <!-- Merkle Proof Validator Form -->
+        <div style="background:var(--bg-card); border:1px solid var(--border-color); border-radius:8px; padding:1.25rem;">
+          <h4 style="font-size:1rem; color:var(--text-light); margin-bottom:.5rem;">🔍 Verify Certificate Inclusion Proof</h4>
+          <p style="font-size:.82rem; color:var(--text-muted); margin-bottom:1rem;">
+            Enter a Certificate ID to calculate its cryptographic sibling path and prove inclusion in the global Merkle root.
+          </p>
+
+          <form method="POST" action="{{ url_for('admin_merkle_verify_proof') }}" style="display:flex; gap:1rem; flex-wrap:wrap;">
+            <input type="text" name="cert_id" class="form-control" placeholder="e.g. CERT-2026-XXXXXX" required style="flex:1; min-width:220px;">
+            <button type="submit" class="btn btn-primary">⚡ Compute & Verify Proof</button>
+          </form>
         </div>
       </div>
     </div>

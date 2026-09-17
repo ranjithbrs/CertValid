@@ -27,6 +27,7 @@ import imagehash
 import db
 import storage
 import notifications
+import merkle
 
 # ─── App Setup ───────────────────────────────────────────────────────────────
 
@@ -437,12 +438,13 @@ def verify():
 
         db.log_verification(cert_id, None, None, 'AUTHENTIC',
                             'Valid certificate ID found in registry.', ip)
+        m_root = merkle.build_merkle_tree(db.get_all_certificates())['root']
         return render_template('result.html', status='AUTHENTIC',
                                reason='Certificate ID verified successfully.',
                                cert=cert, mode='id', computed_hash=None,
                                computed_phash=None, match_type='exact', visual_similarity=100.0,
                                ocr_cert_id=None, signature_valid=sig_valid, public_key_b64=pub_key_b64,
-                               verified_at=now_str)
+                               merkle_root=m_root, verified_at=now_str)
 
     # ── Verify by File Upload ──
     if 'certificate' not in request.files or request.files['certificate'].filename == '':
@@ -524,12 +526,14 @@ def verify():
         reason = f'Certificate ID ({ocr_cert_id}) successfully extracted from document text via OCR/PDF parsing.'
 
     db.log_verification(cert['cert_id'], filename, computed_hash, 'AUTHENTIC', reason, ip)
+    m_root = merkle.build_merkle_tree(db.get_all_certificates())['root']
     return render_template('result.html', status='AUTHENTIC',
                            reason=reason, cert=cert, mode='file',
                            computed_hash=computed_hash, computed_phash=computed_phash,
                            match_type=match_type, visual_similarity=similarity,
                            ocr_cert_id=ocr_cert_id, signature_valid=sig_valid,
-                           public_key_b64=pub_key_b64, verified_at=now_str)
+                           public_key_b64=pub_key_b64, merkle_root=m_root,
+                           verified_at=now_str)
 
 
 @app.route('/verify/<cert_id>')
@@ -565,12 +569,13 @@ def verify_by_id(cert_id):
                                verified_at=now_str)
 
     db.log_verification(cert_id, None, None, 'AUTHENTIC', 'QR scan: certificate verified.', ip)
+    m_root = merkle.build_merkle_tree(db.get_all_certificates())['root']
     return render_template('result.html', status='AUTHENTIC',
                            reason='Certificate verified via QR code.',
                            cert=cert, mode='id', computed_hash=None,
                            computed_phash=None, match_type='exact', visual_similarity=100.0,
                            ocr_cert_id=None, signature_valid=sig_valid, public_key_b64=pub_key_b64,
-                           verified_at=now_str)
+                           merkle_root=m_root, verified_at=now_str)
 
 
 @app.route('/download/<cert_id>')
@@ -706,12 +711,14 @@ def admin_dashboard():
         'sender_email': db.get_setting('sender_email', 'alerts@certvalid.io'),
         'alert_email': db.get_setting('alert_email', ''),
     }
+    merkle_meta = merkle.build_merkle_tree(certs)
     return render_template('admin.html', logged_in=True,
                            certs=certs, logs=logs, stats=stats,
                            admin_role=admin_role, totp_status=totp_status,
                            api_keys=api_keys, selected_status=status_filter,
                            current_theme=current_theme,
                            notification_settings=notification_settings,
+                           merkle_meta=merkle_meta,
                            active_tab='overview')
 
 
@@ -809,6 +816,54 @@ def admin_backup_restore():
         flash('Failed to process JSON snapshot file. Corrupt JSON syntax.', 'error')
 
     return redirect(url_for('admin_dashboard') + '?tab=backups')
+
+
+@app.route('/admin/merkle/verify-proof', methods=['POST'])
+@login_required
+def admin_merkle_verify_proof():
+    """Verify cryptographic Merkle proof for a given certificate ID."""
+    cert_id = request.form.get('cert_id', '').strip().upper()
+    certs = db.get_all_certificates()
+    proof_data = merkle.get_merkle_proof(cert_id, certs)
+
+    if not proof_data:
+        flash(f'Certificate ID {cert_id} not found in current Merkle tree registry.', 'error')
+        return redirect(url_for('admin_dashboard') + '?tab=merkle')
+
+    is_valid = merkle.verify_merkle_proof(proof_data['leaf_hash'], proof_data['proof'], proof_data['merkle_root'])
+    if is_valid:
+        flash(f'✅ Merkle Proof Verified! Certificate {cert_id} mathematically exists in Root: {proof_data["merkle_root"][:16]}... (Proof depth: {proof_data["proof_length"]} steps)', 'success')
+    else:
+        flash(f'❌ Merkle Proof Failed for {cert_id}. Root mismatch!', 'error')
+
+    return redirect(url_for('admin_dashboard') + '?tab=merkle')
+
+
+@app.route('/api/v1/merkle-proof/<cert_id>', methods=['GET'])
+def api_merkle_proof(cert_id):
+    """REST API endpoint to retrieve cryptographic Merkle inclusion proof."""
+    cert_id = cert_id.strip().upper()
+    certs = db.get_all_certificates()
+    proof_data = merkle.get_merkle_proof(cert_id, certs)
+
+    if not proof_data:
+        return jsonify({
+            'status': 'NOT_FOUND',
+            'error': f'Certificate {cert_id} not found in current Merkle registry tree.'
+        }), 404
+
+    is_valid = merkle.verify_merkle_proof(proof_data['leaf_hash'], proof_data['proof'], proof_data['merkle_root'])
+
+    return jsonify({
+        'status': 'SUCCESS',
+        'cert_id': cert_id,
+        'leaf_hash': proof_data['leaf_hash'],
+        'merkle_root': proof_data['merkle_root'],
+        'proof_steps': proof_data['proof'],
+        'proof_length': proof_data['proof_length'],
+        'mathematically_valid': is_valid
+    })
+
 
 
 
