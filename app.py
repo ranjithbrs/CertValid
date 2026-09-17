@@ -8,6 +8,7 @@ import os
 import io
 import uuid
 import csv
+import zipfile
 import hashlib
 from datetime import datetime, timedelta
 from functools import wraps
@@ -811,6 +812,96 @@ def admin_issue():
 
     flash(f'Certificate issued successfully with Ed25519 digital signature! ID: {cert_id}', 'success')
     return redirect(url_for('admin_dashboard') + '?tab=registry')
+
+
+@app.route('/admin/sample-csv')
+@login_required
+def admin_sample_csv():
+    """Download sample CSV template for bulk certificate issuance."""
+    sample_content = (
+        "student_name,course_name,issue_date,issuer_name\n"
+        "Aarav Patel,Full Stack Web Development,2026-09-17,CertValid University\n"
+        "Ananya Roy,Data Science & Machine Learning,2026-09-17,CertValid Institute\n"
+        "Vikram Singh,Cybersecurity Fundamentals,2026-09-17,CertValid Academy\n"
+    )
+    response = make_response(sample_content)
+    response.headers["Content-Disposition"] = "attachment; filename=sample_bulk_certificates.csv"
+    response.headers["Content-Type"] = "text/csv"
+    return response
+
+
+@app.route('/admin/issue/bulk', methods=['POST'])
+@role_required('superadmin', 'issuer')
+def admin_issue_bulk():
+    """Process bulk certificate issuance from CSV file upload and return ZIP archive."""
+    if 'csv_file' not in request.files or request.files['csv_file'].filename == '':
+        flash('No CSV file selected for bulk issuance.', 'error')
+        return redirect(url_for('admin_dashboard') + '?tab=bulk')
+
+    file = request.files['csv_file']
+    if not file.filename.lower().endswith('.csv'):
+        flash('Invalid file type. Please upload a .csv file.', 'error')
+        return redirect(url_for('admin_dashboard') + '?tab=bulk')
+
+    try:
+        stream = io.StringIO(file.read().decode('utf-8-sig'), newline=None)
+        reader = csv.DictReader(stream)
+
+        required_cols = {'student_name', 'course_name', 'issue_date', 'issuer_name'}
+        if not reader.fieldnames or not required_cols.issubset(set(name.strip().lower() for name in reader.fieldnames)):
+            flash('CSV missing required headers: student_name, course_name, issue_date, issuer_name', 'error')
+            return redirect(url_for('admin_dashboard') + '?tab=bulk')
+
+        issued_certs = []
+        zip_buffer = io.BytesIO()
+
+        with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zip_file:
+            for row in reader:
+                row_clean = {k.strip().lower(): v.strip() for k, v in row.items() if k}
+                s_name = row_clean.get('student_name', '')
+                c_name = row_clean.get('course_name', '')
+                i_date = row_clean.get('issue_date', '')
+                i_name = row_clean.get('issuer_name', '')
+
+                if not all([s_name, c_name, i_date, i_name]):
+                    continue
+
+                seed = f'{s_name}|{c_name}|{i_date}|{i_name}|{uuid.uuid4()}'
+                file_hash = hashlib.sha256(seed.encode()).hexdigest()
+                cert_id = db.add_certificate(s_name, c_name, i_date, i_name, file_hash)
+
+                cert_data = {
+                    'student_name': s_name,
+                    'course_name':  c_name,
+                    'issue_date':   i_date,
+                    'issuer_name':  i_name,
+                    'file_hash':    file_hash
+                }
+                rel_path = generate_certificate_image(cert_data, cert_id)
+                full_path = os.path.join(os.path.dirname(__file__), 'static', rel_path)
+
+                if os.path.exists(full_path):
+                    zip_file.write(full_path, arcname=f"Certificate_{cert_id}_{s_name.replace(' ', '_')}.png")
+                issued_certs.append(cert_id)
+
+        if not issued_certs:
+            flash('No valid rows processed from CSV.', 'warning')
+            return redirect(url_for('admin_dashboard') + '?tab=bulk')
+
+        zip_buffer.seek(0)
+        today_str = datetime.now().strftime('%Y%m%d_%H%M%S')
+        filename = f"CertValid_Bulk_Certificates_{today_str}.zip"
+        
+        flash(f'Successfully issued {len(issued_certs)} certificates! Downloading ZIP archive...', 'success')
+        response = make_response(zip_buffer.getvalue())
+        response.headers["Content-Disposition"] = f"attachment; filename={filename}"
+        response.headers["Content-Type"] = "application/zip"
+        return response
+
+    except Exception as e:
+        app.logger.error(f'Bulk issuance failed: {e}')
+        flash('Failed to process bulk issuance CSV file.', 'error')
+        return redirect(url_for('admin_dashboard') + '?tab=bulk')
 
 
 @app.route('/admin/revoke/<cert_id>', methods=['POST'])

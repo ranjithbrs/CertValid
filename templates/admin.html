@@ -144,6 +144,7 @@
       <button class="admin-tab active" id="tab-overview-btn"  onclick="showTab('overview')">📊 Overview</button>
       {% if admin_role != 'auditor' %}
         <button class="admin-tab" id="tab-issue-btn"    onclick="showTab('issue')">➕ Issue Certificate</button>
+        <button class="admin-tab" id="tab-bulk-btn"     onclick="showTab('bulk')">📦 Bulk Issue</button>
       {% endif %}
       <button class="admin-tab" id="tab-registry-btn" onclick="showTab('registry')">📋 Registry</button>
       <button class="admin-tab" id="tab-logs-btn"     onclick="showTab('logs')">📜 Audit Logs</button>
@@ -211,6 +212,40 @@
         <p style="font-size:.8rem; color:var(--text-dim); margin-top:1rem; text-align:center;">
           A unique Certificate ID, SHA-256 hash, pHash, and Ed25519 signature will be generated automatically.
         </p>
+      </div>
+    {% endif %}
+
+    <!-- ── Bulk Issue Tab ── -->
+    {% if admin_role != 'auditor' %}
+    <div class="admin-tab-pane" id="tab-bulk" style="display:none;">
+      <div class="card" style="max-width:680px; margin:0 auto;">
+        <h3 style="margin-bottom:.5rem; font-size:1.1rem; display:flex; align-items:center; gap:.5rem;">
+          📦 Bulk Certificate Issuance via CSV
+        </h3>
+        <p style="color:var(--text-muted); font-size:.88rem; margin-bottom:1.5rem;">
+          Upload a CSV file containing multiple student entries to issue signed certificates in batch. All generated certificate PNG images will be bundled into a downloadable ZIP archive.
+        </p>
+
+        <div style="background:var(--bg-card); border:1px solid var(--border-color); border-radius:8px; padding:1.25rem; margin-bottom:1.5rem;">
+          <h4 style="font-size:.9rem; color:var(--accent-gold); margin-bottom:.5rem;">CSV Column Header Requirements</h4>
+          <p style="font-size:.82rem; color:var(--text-muted); margin-bottom:1rem;">
+            Your CSV file must include these exact column headers in the first row:
+          </p>
+          <code style="display:block; background:rgba(0,0,0,0.3); padding:8px 12px; border-radius:6px; font-size:.85rem; color:var(--text-light); font-family:monospace; margin-bottom:1rem;">
+            student_name,course_name,issue_date,issuer_name
+          </code>
+          <a href="{{ url_for('admin_sample_csv') }}" class="btn btn-ghost btn-sm">📥 Download Sample CSV Template</a>
+        </div>
+
+        <form method="POST" action="{{ url_for('admin_issue_bulk') }}" enctype="multipart/form-data">
+          <div class="form-group">
+            <label class="form-label" for="csv_file">Select Batch CSV File</label>
+            <input type="file" id="csv_file" name="csv_file" class="form-control" accept=".csv" required>
+          </div>
+          <button type="submit" class="btn btn-primary btn-full btn-lg" style="margin-top:.5rem;">
+            🚀 Issue Bulk Certificates & Download ZIP
+          </button>
+        </form>
       </div>
     </div>
     {% endif %}
