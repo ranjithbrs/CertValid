@@ -904,12 +904,38 @@ def admin_issue_bulk():
         return redirect(url_for('admin_dashboard') + '?tab=bulk')
 
 
+@app.route('/admin/revoke/confirm/<cert_id>', methods=['GET'])
+@role_required('superadmin')
+def admin_revoke_confirm(cert_id):
+    """Render high-security confirmation page with 2FA OTP prompt for revocation."""
+    cert_id = cert_id.strip().upper()
+    cert    = db.get_certificate_by_id(cert_id)
+    if not cert:
+        flash('Certificate not found.', 'error')
+        return redirect(url_for('admin_dashboard') + '?tab=registry')
+
+    username    = session.get('admin_user', 'admin')
+    totp_status = db.get_admin_2fa_status(username)
+    return render_template('admin_revoke_confirm.html', cert=cert, totp_status=totp_status)
+
+
 @app.route('/admin/revoke/<cert_id>', methods=['POST'])
 @role_required('superadmin')
 def admin_revoke(cert_id):
-    cert_id = cert_id.strip().upper()
+    """Revoke a certificate after verifying 2FA OTP code if enabled."""
+    cert_id  = cert_id.strip().upper()
+    username = session.get('admin_user', 'admin')
+    totp_status = db.get_admin_2fa_status(username)
+
+    if totp_status and totp_status.get('enabled'):
+        totp_code = request.form.get('totp_code', '').strip()
+        secret    = totp_status.get('secret')
+        if not db.verify_totp_code(secret, totp_code):
+            flash('Security Error: Invalid 2FA verification code. Certificate revocation cancelled.', 'error')
+            return redirect(url_for('admin_dashboard') + '?tab=registry')
+
     db.revoke_certificate(cert_id)
-    flash(f'Certificate {cert_id} has been revoked.', 'warning')
+    flash(f'Certificate {cert_id} has been revoked with security verification.', 'warning')
     return redirect(url_for('admin_dashboard') + '?tab=registry')
 
 
