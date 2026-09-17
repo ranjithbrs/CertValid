@@ -89,9 +89,14 @@
       <div class="section-header">
         <span class="section-title">📋 Certificate Details</span>
         {% if status_upper == 'AUTHENTIC' and cert.cert_id %}
-          <a href="{{ url_for('download_cert', cert_id=cert.cert_id) }}" class="btn btn-success btn-sm">
-            ⬇️ Download Certificate
-          </a>
+          <div style="display:flex; gap:.5rem; flex-wrap:wrap;">
+            <a href="{{ url_for('download_cert', cert_id=cert.cert_id) }}" class="btn btn-ghost btn-sm">
+              ⬇️ Download PNG
+            </a>
+            <a href="{{ url_for('download_cert_pdf', cert_id=cert.cert_id) }}" class="btn btn-success btn-sm">
+              📄 Download Official PDF
+            </a>
+          </div>
         {% endif %}
       </div>
       <div class="info-grid">

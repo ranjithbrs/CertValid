@@ -28,6 +28,7 @@ import db
 import storage
 import notifications
 import merkle
+import pdf_cert
 
 # ─── App Setup ───────────────────────────────────────────────────────────────
 
@@ -632,6 +633,29 @@ def download_cert(cert_id):
 
     return send_file(cert_path, as_attachment=True,
                      download_name=f'Certificate_{cert_id}.png')
+
+
+@app.route('/download/pdf/<cert_id>')
+def download_cert_pdf(cert_id):
+    """Generate and stream official vector-quality PDF certificate."""
+    cert_id = cert_id.strip().upper()
+    cert = db.get_certificate_by_id(cert_id)
+    if not cert:
+        flash('Certificate not found.', 'error')
+        return redirect(url_for('index'))
+
+    try:
+        current_theme = db.get_setting('cert_theme', 'gold')
+        pdf_bytes = pdf_cert.generate_vector_pdf_certificate(cert, theme=current_theme)
+        response = make_response(pdf_bytes)
+        response.headers["Content-Disposition"] = f"attachment; filename=Certificate_{cert_id}.pdf"
+        response.headers["Content-Type"] = "application/pdf"
+        return response
+    except Exception as e:
+        app.logger.error(f'PDF certificate generation failed: {e}')
+        flash('Official PDF generation failed. Ensure ReportLab is installed.', 'error')
+        return redirect(url_for('verify_by_id', cert_id=cert_id))
+
 
 
 # ─── Admin Routes ─────────────────────────────────────────────────────────────
