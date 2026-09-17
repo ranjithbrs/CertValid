@@ -206,6 +206,16 @@
         </div>
       {% endif %}
 
+      {% if merkle_root %}
+        <div class="form-group" style="margin-top:1rem;">
+          <div class="form-label">Global Registry Merkle Root (Batch Integrity Hash)</div>
+          <div class="hash-block" style="color:var(--accent-gold);">{{ merkle_root }}</div>
+        </div>
+        <div style="margin-top:.5rem; padding:.75rem 1rem; border-radius:8px; font-size:.9rem; font-weight:600; background: rgba(212,175,55,0.10); color: var(--accent-gold); border: 1px solid rgba(212,175,55,0.3);">
+          ⛓️ Cryptographic Merkle Proof — This certificate is permanently anchored in the registry's cryptographic Merkle tree.
+        </div>
+      {% endif %}
+
       {% if not computed_hash and not (cert and cert.file_hash) %}
         <p style="color:var(--text-dim); font-size:.9rem;">
           Verification was performed using Certificate ID lookup (no file hash computed).
