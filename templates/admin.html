@@ -4,13 +4,12 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Admin Dashboard — CertValid</title>
-  <meta name="description" content="Admin dashboard to issue, manage, and audit certificates.">
   <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
 </head>
 <body>
 
 {% if not logged_in %}
-<!-- ─── Admin Login Page ─────────────────────────────────────── -->
+<!-- ─── Admin Login Form ────────────────────────────────────────── -->
 <nav class="navbar">
   <div class="navbar-brand">
     <div class="logo-icon">🛡️</div>
@@ -72,6 +71,11 @@
     CertValid Admin
   </div>
   <div class="navbar-links">
+    <span class="badge badge-authentic" style="font-size:.8rem; margin-right:.5rem;">
+      {% if admin_role == 'superadmin' %}👑 Super Admin
+      {% elif admin_role == 'issuer' %}🎓 Issuer
+      {% else %}👁️ Auditor{% endif %}
+    </span>
     <a href="{{ url_for('index') }}">🔍 Public Portal</a>
     <a href="{{ url_for('admin_logout') }}" class="btn btn-ghost btn-sm">🚪 Logout</a>
   </div>
@@ -95,12 +99,14 @@
     {% endwith %}
 
     <!-- Dashboard Header -->
-    <div style="margin-bottom:2rem; display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:1rem;">
+    <div style="margin-bottom:2rem; display:flex; align-items:center; justify-space-between; flex-wrap:wrap; gap:1rem;">
       <div>
         <h1 style="font-size:1.7rem; margin-bottom:.25rem;">Admin Dashboard</h1>
         <p style="color:var(--text-muted); font-size:.9rem;">Manage the certificate registry and audit logs.</p>
       </div>
-      <button class="btn btn-primary" onclick="showTab('issue')">+ Issue New Certificate</button>
+      {% if admin_role != 'auditor' %}
+        <button class="btn btn-primary" onclick="showTab('issue')">+ Issue New Certificate</button>
+      {% endif %}
     </div>
 
     <!-- Stats Grid -->
@@ -136,7 +142,9 @@
     <!-- Admin Tab Nav -->
     <div class="admin-tabs">
       <button class="admin-tab active" id="tab-overview-btn"  onclick="showTab('overview')">📊 Overview</button>
-      <button class="admin-tab" id="tab-issue-btn"    onclick="showTab('issue')">➕ Issue Certificate</button>
+      {% if admin_role != 'auditor' %}
+        <button class="admin-tab" id="tab-issue-btn"    onclick="showTab('issue')">➕ Issue Certificate</button>
+      {% endif %}
       <button class="admin-tab" id="tab-registry-btn" onclick="showTab('registry')">📋 Registry</button>
       <button class="admin-tab" id="tab-logs-btn"     onclick="showTab('logs')">📜 Audit Logs</button>
     </div>
@@ -147,25 +155,28 @@
         <div class="card">
           <h3 style="margin-bottom:1rem; font-size:1rem;">Quick Actions</h3>
           <div style="display:flex; flex-direction:column; gap:.75rem;">
-            <button class="btn btn-primary" onclick="showTab('issue')">➕ Issue New Certificate</button>
+            {% if admin_role != 'auditor' %}
+              <button class="btn btn-primary" onclick="showTab('issue')">➕ Issue New Certificate</button>
+            {% endif %}
             <button class="btn btn-ghost" onclick="showTab('registry')">📋 View Registry</button>
             <button class="btn btn-ghost" onclick="showTab('logs')">📜 View Audit Logs</button>
             <a href="{{ url_for('index') }}" class="btn btn-ghost">🔍 Public Verification Portal</a>
           </div>
         </div>
         <div class="card">
-          <h3 style="margin-bottom:1rem; font-size:1rem;">System Info</h3>
+          <h3 style="margin-bottom:1rem; font-size:1rem;">System Info & Security</h3>
           <div style="display:flex; flex-direction:column; gap:.75rem; font-size:.88rem; color:var(--text-muted);">
-            <div>🔐 Hash Algorithm: <strong style="color:var(--text);">SHA-256</strong></div>
-            <div>🗄️ Database: <strong style="color:var(--text);">SQLite</strong></div>
-            <div>🌐 Framework: <strong style="color:var(--text);">Flask</strong></div>
-            <div>📦 Supported Formats: <strong style="color:var(--text);">JPG, PNG, PDF</strong></div>
+            <div>🔐 Hash Algorithm: <strong style="color:var(--text);">SHA-256 & pHash</strong></div>
+            <div>🔏 Digital Signatures: <strong style="color:var(--text);">Ed25519 Asymmetric</strong></div>
+            <div>🗄️ Database Engine: <strong style="color:var(--text);">SQLAlchemy Abstraction</strong></div>
+            <div>🛡️ Security Features: <strong style="color:var(--text);">Flask-Limiter, Security Headers, PBKDF2</strong></div>
           </div>
         </div>
       </div>
     </div>
 
     <!-- ── Issue Certificate Tab ── -->
+    {% if admin_role != 'auditor' %}
     <div class="admin-tab-pane" id="tab-issue" style="display:none;">
       <div class="card" style="max-width:620px;">
         <div class="section-header">
@@ -193,10 +204,11 @@
           </button>
         </form>
         <p style="font-size:.8rem; color:var(--text-dim); margin-top:1rem; text-align:center;">
-          A unique Certificate ID and SHA-256 hash will be generated. A downloadable certificate image with embedded QR code will also be created.
+          A unique Certificate ID, SHA-256 hash, pHash, and Ed25519 signature will be generated automatically.
         </p>
       </div>
     </div>
+    {% endif %}
 
     <!-- ── Registry Tab ── -->
     <div class="admin-tab-pane" id="tab-registry" style="display:none;">
@@ -238,14 +250,16 @@
                 <div style="display:flex; gap:.5rem; flex-wrap:wrap;">
                   <a href="{{ url_for('verify_by_id', cert_id=cert.cert_id) }}" target="_blank" class="btn btn-ghost btn-sm">🔍</a>
                   <a href="{{ url_for('download_cert', cert_id=cert.cert_id) }}" class="btn btn-ghost btn-sm">⬇️</a>
-                  {% if cert.status == 'active' %}
-                    <form method="POST" action="{{ url_for('admin_revoke', cert_id=cert.cert_id) }}" onsubmit="return confirm('Revoke certificate {{ cert.cert_id }}?')">
-                      <button type="submit" class="btn btn-danger btn-sm">🚫 Revoke</button>
-                    </form>
-                  {% else %}
-                    <form method="POST" action="{{ url_for('admin_reactivate', cert_id=cert.cert_id) }}">
-                      <button type="submit" class="btn btn-success btn-sm">✅ Reactivate</button>
-                    </form>
+                  {% if admin_role == 'superadmin' %}
+                    {% if cert.status == 'active' %}
+                      <form method="POST" action="{{ url_for('admin_revoke', cert_id=cert.cert_id) }}" onsubmit="return confirm('Revoke certificate {{ cert.cert_id }}?')">
+                        <button type="submit" class="btn btn-danger btn-sm">🚫 Revoke</button>
+                      </form>
+                    {% else %}
+                      <form method="POST" action="{{ url_for('admin_reactivate', cert_id=cert.cert_id) }}">
+                        <button type="submit" class="btn btn-success btn-sm">✅ Reactivate</button>
+                      </form>
+                    {% endif %}
                   {% endif %}
                 </div>
               </td>
@@ -258,7 +272,9 @@
         <div class="card" style="text-align:center; padding:3rem;">
           <div style="font-size:2.5rem; margin-bottom:1rem;">📭</div>
           <p style="color:var(--text-muted);">No certificates in the registry yet.</p>
-          <button class="btn btn-primary" style="margin-top:1rem;" onclick="showTab('issue')">+ Issue First Certificate</button>
+          {% if admin_role != 'auditor' %}
+            <button class="btn btn-primary" style="margin-top:1rem;" onclick="showTab('issue')">+ Issue First Certificate</button>
+          {% endif %}
         </div>
       {% endif %}
     </div>
@@ -326,7 +342,6 @@
 {% endif %}
 
 <script>
-  // Admin tab switching
   function showTab(tabName) {
     document.querySelectorAll('.admin-tab-pane').forEach(p => p.style.display = 'none');
     document.querySelectorAll('.admin-tab').forEach(b => b.classList.remove('active'));
@@ -336,7 +351,6 @@
     if (btn)  btn.classList.add('active');
   }
 
-  // Check URL param for active tab
   (function() {
     const params = new URLSearchParams(window.location.search);
     const tab = params.get('tab');

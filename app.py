@@ -1,7 +1,7 @@
 """
 app.py - Flask application for the Certificate Verification & Management System.
 Handles public verification (file upload or cert ID), admin dashboard, certificate issuance.
-Includes rate limiting, anti-spam, security headers, pHash, OCR text extraction, Ed25519 digital signatures, and Cloud Storage.
+Includes rate limiting, anti-spam, security headers, pHash, OCR text extraction, Ed25519 digital signatures, Cloud Storage, and RBAC Multi-Role Access Control.
 """
 
 import os
@@ -68,7 +68,7 @@ def add_security_headers(response):
     return response
 
 
-# ─── Helpers ─────────────────────────────────────────────────────────────────
+# ─── Helpers & RBAC Decorators ───────────────────────────────────────────────
 
 def allowed_file(filename):
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
@@ -81,6 +81,22 @@ def login_required(f):
             return redirect(url_for('admin'))
         return f(*args, **kwargs)
     return decorated
+
+
+def role_required(*permitted_roles):
+    """RBAC decorator restricting route access to specified roles."""
+    def decorator(f):
+        @wraps(f)
+        def decorated(*args, **kwargs):
+            if not session.get('admin_logged_in'):
+                return redirect(url_for('admin'))
+            user_role = session.get('admin_role', 'superadmin')
+            if user_role not in permitted_roles:
+                flash(f'Access denied. Your role ({user_role}) does not have permission for this action.', 'error')
+                return redirect(url_for('admin_dashboard'))
+            return f(*args, **kwargs)
+        return decorated
+    return decorator
 
 
 def generate_certificate_image(cert_data: dict, cert_id: str) -> str:
@@ -437,10 +453,12 @@ def admin():
     if request.method == 'POST':
         username = request.form.get('username', '')
         password = request.form.get('password', '')
-        if db.verify_admin(username, password):
+        admin_user = db.verify_admin(username, password)
+        if admin_user:
             session.permanent = True
             session['admin_logged_in'] = True
-            session['admin_user'] = username
+            session['admin_user'] = admin_user['username']
+            session['admin_role'] = admin_user['role']
             return redirect(url_for('admin_dashboard'))
         flash('Invalid username or password.', 'error')
         return render_template('admin.html', logged_in=False)
@@ -457,13 +475,14 @@ def admin_dashboard():
     certs = db.get_all_certificates()
     logs  = db.get_all_logs(50)
     stats = db.get_stats()
+    admin_role = session.get('admin_role', 'superadmin')
     return render_template('admin.html', logged_in=True,
                            certs=certs, logs=logs, stats=stats,
-                           active_tab='overview')
+                           admin_role=admin_role, active_tab='overview')
 
 
 @app.route('/admin/issue', methods=['POST'])
-@login_required
+@role_required('superadmin', 'issuer')
 def admin_issue():
     student_name = request.form.get('student_name', '').strip()
     course_name  = request.form.get('course_name',  '').strip()
@@ -495,7 +514,7 @@ def admin_issue():
 
 
 @app.route('/admin/revoke/<cert_id>', methods=['POST'])
-@login_required
+@role_required('superadmin')
 def admin_revoke(cert_id):
     cert_id = cert_id.strip().upper()
     db.revoke_certificate(cert_id)
@@ -504,7 +523,7 @@ def admin_revoke(cert_id):
 
 
 @app.route('/admin/reactivate/<cert_id>', methods=['POST'])
-@login_required
+@role_required('superadmin')
 def admin_reactivate(cert_id):
     cert_id = cert_id.strip().upper()
     db.reactivate_certificate(cert_id)

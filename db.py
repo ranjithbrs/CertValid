@@ -1,7 +1,7 @@
 """
 db.py - Database initialization and helper functions for the Certificate Verification System.
 Uses SQLite for local persistence or PostgreSQL/MySQL via DATABASE_URL environment variable.
-Includes SHA-256, pHash, OCR text extraction, Ed25519 digital signatures, and SQLAlchemy database abstraction.
+Includes SHA-256, pHash, OCR text extraction, Ed25519 signatures, and RBAC Multi-Role Access Control.
 """
 
 import sqlite3
@@ -30,7 +30,6 @@ PUB_KEY_PATH = os.path.join(KEYS_DIR, 'ed25519_public.pem')
 _private_key = None
 _public_key = None
 
-# Database connection URL setup (SQLAlchemy)
 DATABASE_URL = os.environ.get('DATABASE_URL', '')
 if DATABASE_URL.startswith('postgres://'):
     DATABASE_URL = DATABASE_URL.replace('postgres://', 'postgresql://', 1)
@@ -43,10 +42,7 @@ if DATABASE_URL:
 # ─── Connection ───────────────────────────────────────────────────────────────
 
 def get_db():
-    """
-    Get a database connection.
-    Connects to PostgreSQL/MySQL if DATABASE_URL is provided, or local SQLite database.db.
-    """
+    """Get a database connection."""
     if _engine:
         conn = _engine.raw_connection()
         return conn
@@ -77,7 +73,6 @@ def init_keys():
         except Exception:
             pass
 
-    # Generate new Ed25519 keypair
     _private_key = ed25519.Ed25519PrivateKey.generate()
     _public_key = _private_key.public_key()
 
@@ -179,7 +174,7 @@ def init_db():
         )
     ''')
 
-    # Migration checks: ensure phash and signature columns exist
+    # Migration checks for certificates table
     try:
         columns = [r['name'] if isinstance(r, dict) or hasattr(r, '__getitem__') else r[1]
                    for r in c.execute("PRAGMA table_info(certificates)").fetchall()]
@@ -190,7 +185,6 @@ def init_db():
     except Exception:
         pass
 
-    # Index on file_hash for O(1) exact lookups
     c.execute('''
         CREATE INDEX IF NOT EXISTS idx_file_hash ON certificates(file_hash)
     ''')
@@ -209,23 +203,33 @@ def init_db():
         )
     ''')
 
-    # Admin users table
+    # Admin users table with RBAC role
     c.execute('''
         CREATE TABLE IF NOT EXISTS admin_users (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             username TEXT UNIQUE NOT NULL,
-            password_hash TEXT NOT NULL
+            password_hash TEXT NOT NULL,
+            role TEXT NOT NULL DEFAULT 'superadmin'
         )
     ''')
 
-    # Seed default admin with secure PBKDF2 hash
+    # Migration check for admin_users table role column
+    try:
+        admin_cols = [r['name'] if isinstance(r, dict) or hasattr(r, '__getitem__') else r[1]
+                      for r in c.execute("PRAGMA table_info(admin_users)").fetchall()]
+        if 'role' not in admin_cols:
+            c.execute("ALTER TABLE admin_users ADD COLUMN role TEXT NOT NULL DEFAULT 'superadmin'")
+    except Exception:
+        pass
+
+    # Seed default admin with secure PBKDF2 hash & superadmin role
     existing_admin = c.execute(
         'SELECT id FROM admin_users WHERE username = ?', ('admin',)
     ).fetchone()
     if not existing_admin:
         secure_hash = _hash_password('admin123')
         c.execute(
-            'INSERT INTO admin_users (username, password_hash) VALUES (?, ?)',
+            "INSERT INTO admin_users (username, password_hash, role) VALUES (?, ?, 'superadmin')",
             ('admin', secure_hash)
         )
 
@@ -314,7 +318,7 @@ def compute_file_phash(file_bytes: bytes) -> str:
 def extract_text_from_file(file_bytes: bytes, filename: str = '') -> str:
     """
     Extract text content from uploaded file bytes.
-    Supports native PDF parsing via pypdf and OCR image parsing via pytesseract (with graceful fallback).
+    Supports native PDF parsing via pypdf and OCR image parsing via pytesseract.
     """
     extracted_text = ""
     ext = filename.rsplit('.', 1)[-1].lower() if '.' in filename else ''
@@ -525,18 +529,21 @@ def get_stats():
 def verify_admin(username, password):
     """
     Verify admin credentials using PBKDF2 (with legacy SHA-256 upgrade path).
-    Returns True if valid.
+    Returns admin user dict with role if valid, or None if invalid.
     """
     conn = get_db()
     row = conn.execute(
-        'SELECT id, password_hash FROM admin_users WHERE username = ?', (username,)
+        'SELECT * FROM admin_users WHERE username = ?', (username,)
     ).fetchone()
 
     if not row:
         conn.close()
-        return False
+        return None
 
-    stored_hash = row['password_hash']
+    r_dict = dict(row)
+    stored_hash = r_dict['password_hash']
+    role = r_dict.get('role', 'superadmin')
+    user_dict = {'id': r_dict['id'], 'username': r_dict['username'], 'role': role}
 
     if _is_legacy_sha256(stored_hash):
         old_hash = hashlib.sha256(password.encode()).hexdigest()
@@ -548,9 +555,12 @@ def verify_admin(username, password):
             )
             conn.commit()
             conn.close()
-            return True
+            return user_dict
         conn.close()
-        return False
+        return None
 
     conn.close()
-    return _verify_password(password, stored_hash)
+    if _verify_password(password, stored_hash):
+        return user_dict
+
+    return None
