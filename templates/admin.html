@@ -481,6 +481,7 @@
                   <a href="{{ url_for('download_cert', cert_id=cert.cert_id) }}" class="btn btn-ghost btn-sm" title="Download PNG">⬇️</a>
                   <a href="{{ url_for('download_cert_pdf', cert_id=cert.cert_id) }}" class="btn btn-ghost btn-sm" title="Download Official PDF">📄 PDF</a>
                   <a href="{{ url_for('cert_qr_badge', cert_id=cert.cert_id) }}" target="_blank" class="btn btn-ghost btn-sm" title="Branded QR Badge">📱 QR</a>
+                  <a href="{{ url_for('cert_badge_svg', cert_id=cert.cert_id) }}" target="_blank" class="btn btn-ghost btn-sm" title="Dynamic Vector SVG Badge">🏷️ Badge</a>
                   {% if admin_role == 'superadmin' %}
                     {% if cert.status == 'active' %}
                       <a href="{{ url_for('admin_revoke_confirm', cert_id=cert.cert_id) }}" class="btn btn-danger btn-sm">🚫 Revoke</a>

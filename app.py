@@ -29,6 +29,7 @@ import storage
 import notifications
 import merkle
 import pdf_cert
+import badge
 
 # ─── App Setup ───────────────────────────────────────────────────────────────
 
@@ -71,7 +72,11 @@ BASE_URL = os.environ.get('BASE_URL', 'https://ranjithbrs.pythonanywhere.com').r
 @app.after_request
 def add_security_headers(response):
     response.headers['X-Content-Type-Options'] = 'nosniff'
-    response.headers['X-Frame-Options'] = 'SAMEORIGIN'
+    if request.path.startswith('/embed/'):
+        response.headers.pop('X-Frame-Options', None)
+        response.headers['Content-Security-Policy'] = "frame-ancestors *"
+    else:
+        response.headers['X-Frame-Options'] = 'SAMEORIGIN'
     response.headers['X-XSS-Protection'] = '1; mode=block'
     response.headers['Referrer-Policy'] = 'strict-origin-when-cross-origin'
     return response
@@ -656,6 +661,42 @@ def download_cert_pdf(cert_id):
         flash('Official PDF generation failed. Ensure ReportLab is installed.', 'error')
         return redirect(url_for('verify_by_id', cert_id=cert_id))
 
+
+# ─── Public Verification Badge & Embed Routes ─────────────────────────────────
+
+@app.route('/badge/<cert_id>.svg')
+@app.route('/badge/<cert_id>')
+def cert_badge_svg(cert_id):
+    """Serve dynamic scalable vector SVG badge for READMEs, CVs, and websites."""
+    cert_id = cert_id.strip().upper()
+    cert = db.get_certificate_by_id(cert_id)
+
+    style = request.args.get('style', 'shield').lower()
+    theme = request.args.get('theme', 'dark').lower()
+
+    svg_content = badge.generate_svg_badge(cert, style=style, theme=theme)
+    response = make_response(svg_content)
+    response.headers['Content-Type'] = 'image/svg+xml; charset=utf-8'
+    response.headers['Cache-Control'] = 'public, max-age=300'
+    return response
+
+
+@app.route('/embed/<cert_id>')
+def cert_embed_widget(cert_id):
+    """Serve responsive micro-widget for third-party iframe embeds."""
+    cert_id = cert_id.strip().upper()
+    cert = db.get_certificate_by_id(cert_id)
+
+    if not cert:
+        status = 'INVALID'
+    elif cert.get('status') == 'revoked':
+        status = 'REVOKED'
+    elif cert.get('is_expired') or cert.get('effective_status') == 'expired':
+        status = 'EXPIRED'
+    else:
+        status = 'AUTHENTIC'
+
+    return render_template('embed.html', cert=cert, cert_id=cert_id, status=status)
 
 
 # ─── Admin Routes ─────────────────────────────────────────────────────────────
