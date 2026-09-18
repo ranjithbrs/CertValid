@@ -31,6 +31,7 @@ import merkle
 import pdf_cert
 import badge
 import social
+import transcript_pdf
 
 # ─── App Setup ───────────────────────────────────────────────────────────────
 
@@ -417,6 +418,10 @@ def verify():
             flash('Please enter a Certificate ID.', 'error')
             return redirect(url_for('index'))
 
+        # Auto-detect Academic Transcript Bundle IDs
+        if cert_id.startswith('TR-') or db.get_bundle(cert_id):
+            return redirect(url_for('verify_transcript', bundle_id=cert_id))
+
         cert = db.get_certificate_by_id(cert_id)
         if not cert:
             db.log_verification(cert_id, None, None, 'INVALID',
@@ -426,12 +431,14 @@ def verify():
                                    cert=None, mode='id', computed_hash=None,
                                    computed_phash=None, match_type=None, visual_similarity=0.0,
                                    ocr_cert_id=None, signature_valid=False, public_key_b64=pub_key_b64,
-                                   verified_at=now_str)
+                                   bundles=[], verified_at=now_str)
 
         sig_valid = False
         if cert and cert.get('signature'):
             payload = db.build_cert_payload(cert['cert_id'], cert['student_name'], cert['course_name'], cert['issue_date'], cert['file_hash'])
             sig_valid = db.verify_payload_signature(payload, cert['signature'])
+
+        bundles = db.get_bundles_for_cert(cert['cert_id'])
 
         if cert['status'] == 'revoked':
             db.log_verification(cert_id, None, None, 'REVOKED',
@@ -441,7 +448,7 @@ def verify():
                                    cert=cert, mode='id', computed_hash=None,
                                    computed_phash=None, match_type=None, visual_similarity=0.0,
                                    ocr_cert_id=None, signature_valid=sig_valid, public_key_b64=pub_key_b64,
-                                   verified_at=now_str)
+                                   bundles=bundles, verified_at=now_str)
 
         if cert.get('is_expired') or cert.get('effective_status') == 'expired':
             db.log_verification(cert_id, None, None, 'EXPIRED',
@@ -452,7 +459,7 @@ def verify():
                                    cert=cert, mode='id', computed_hash=None,
                                    computed_phash=None, match_type='exact', visual_similarity=100.0,
                                    ocr_cert_id=None, signature_valid=sig_valid, public_key_b64=pub_key_b64,
-                                   merkle_root=m_root, verified_at=now_str)
+                                   merkle_root=m_root, bundles=bundles, verified_at=now_str)
 
         db.log_verification(cert_id, None, None, 'AUTHENTIC',
                             'Valid certificate ID found in registry.', ip)
@@ -462,7 +469,7 @@ def verify():
                                cert=cert, mode='id', computed_hash=None,
                                computed_phash=None, match_type='exact', visual_similarity=100.0,
                                ocr_cert_id=None, signature_valid=sig_valid, public_key_b64=pub_key_b64,
-                               merkle_root=m_root, verified_at=now_str)
+                               merkle_root=m_root, bundles=bundles, verified_at=now_str)
 
     # ── Verify by File Upload ──
     if 'certificate' not in request.files or request.files['certificate'].filename == '':
@@ -514,6 +521,8 @@ def verify():
         payload = db.build_cert_payload(cert['cert_id'], cert['student_name'], cert['course_name'], cert['issue_date'], cert['file_hash'])
         sig_valid = db.verify_payload_signature(payload, cert['signature'])
 
+    bundles = db.get_bundles_for_cert(cert['cert_id']) if cert else []
+
     if not cert:
         db.log_verification(None, filename, computed_hash, 'INVALID',
                             'No matching certificate found by SHA-256, visual pHash, or OCR text.', ip)
@@ -523,7 +532,7 @@ def verify():
                                cert=None, mode='file', computed_hash=computed_hash,
                                computed_phash=computed_phash, match_type=None, visual_similarity=0.0,
                                ocr_cert_id=None, signature_valid=False, public_key_b64=pub_key_b64,
-                               verified_at=now_str)
+                               bundles=[], verified_at=now_str)
 
     if cert['status'] == 'revoked':
         db.log_verification(cert['cert_id'], filename, computed_hash, 'REVOKED',
@@ -534,7 +543,7 @@ def verify():
                                computed_phash=computed_phash, match_type=match_type,
                                visual_similarity=similarity, ocr_cert_id=ocr_cert_id,
                                signature_valid=sig_valid, public_key_b64=pub_key_b64,
-                               verified_at=now_str)
+                               bundles=bundles, verified_at=now_str)
 
     if cert.get('is_expired') or cert.get('effective_status') == 'expired':
         db.log_verification(cert['cert_id'], filename, computed_hash, 'EXPIRED',
@@ -546,7 +555,7 @@ def verify():
                                computed_phash=computed_phash, match_type=match_type,
                                visual_similarity=similarity, ocr_cert_id=ocr_cert_id,
                                signature_valid=sig_valid, public_key_b64=pub_key_b64,
-                               merkle_root=m_root, verified_at=now_str)
+                               merkle_root=m_root, bundles=bundles, verified_at=now_str)
 
     if match_type == 'exact':
         reason = 'File hash matches the registry exactly (100% byte-perfect).'
@@ -563,7 +572,7 @@ def verify():
                            match_type=match_type, visual_similarity=similarity,
                            ocr_cert_id=ocr_cert_id, signature_valid=sig_valid,
                            public_key_b64=pub_key_b64, merkle_root=m_root,
-                           verified_at=now_str)
+                           bundles=bundles, verified_at=now_str)
 
 
 @app.route('/verify/<cert_id>')
@@ -571,6 +580,11 @@ def verify_by_id(cert_id):
     """QR code scan endpoint — direct link verification."""
     ip      = request.remote_addr
     cert_id = cert_id.strip().upper()
+
+    # Auto-detect Academic Transcript Bundle IDs
+    if cert_id.startswith('TR-') or (not db.get_certificate_by_id(cert_id) and db.get_bundle(cert_id)):
+        return redirect(url_for('verify_transcript', bundle_id=cert_id))
+
     cert    = db.get_certificate_by_id(cert_id)
     now_str = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
     pub_key_b64 = db.get_public_key_b64()
@@ -580,6 +594,8 @@ def verify_by_id(cert_id):
         payload = db.build_cert_payload(cert['cert_id'], cert['student_name'], cert['course_name'], cert['issue_date'], cert['file_hash'])
         sig_valid = db.verify_payload_signature(payload, cert['signature'])
 
+    bundles = db.get_bundles_for_cert(cert['cert_id']) if cert else []
+
     if not cert:
         db.log_verification(cert_id, None, None, 'INVALID', 'QR scan: ID not found.', ip)
         return render_template('result.html', status='INVALID',
@@ -587,7 +603,7 @@ def verify_by_id(cert_id):
                                cert=None, mode='id', computed_hash=None,
                                computed_phash=None, match_type=None, visual_similarity=0.0,
                                ocr_cert_id=None, signature_valid=False, public_key_b64=pub_key_b64,
-                               verified_at=now_str)
+                               bundles=[], verified_at=now_str)
 
     if cert['status'] == 'revoked':
         db.log_verification(cert_id, None, None, 'REVOKED', 'QR scan: certificate revoked.', ip)
@@ -596,7 +612,7 @@ def verify_by_id(cert_id):
                                cert=cert, mode='id', computed_hash=None,
                                computed_phash=None, match_type=None, visual_similarity=0.0,
                                ocr_cert_id=None, signature_valid=sig_valid, public_key_b64=pub_key_b64,
-                               verified_at=now_str)
+                               bundles=bundles, verified_at=now_str)
 
     if cert.get('is_expired') or cert.get('effective_status') == 'expired':
         db.log_verification(cert_id, None, None, 'EXPIRED', f'QR scan: certificate expired on {cert.get("expires_at")}.', ip)
@@ -606,7 +622,7 @@ def verify_by_id(cert_id):
                                cert=cert, mode='id', computed_hash=None,
                                computed_phash=None, match_type='exact', visual_similarity=100.0,
                                ocr_cert_id=None, signature_valid=sig_valid, public_key_b64=pub_key_b64,
-                               merkle_root=m_root, verified_at=now_str)
+                               merkle_root=m_root, bundles=bundles, verified_at=now_str)
 
     db.log_verification(cert_id, None, None, 'AUTHENTIC', 'QR scan: certificate verified.', ip)
     m_root = merkle.build_merkle_tree(db.get_all_certificates())['root']
@@ -615,7 +631,7 @@ def verify_by_id(cert_id):
                            cert=cert, mode='id', computed_hash=None,
                            computed_phash=None, match_type='exact', visual_similarity=100.0,
                            ocr_cert_id=None, signature_valid=sig_valid, public_key_b64=pub_key_b64,
-                           merkle_root=m_root, verified_at=now_str)
+                           merkle_root=m_root, bundles=bundles, verified_at=now_str)
 
 
 @app.route('/download/<cert_id>')
@@ -661,6 +677,48 @@ def download_cert_pdf(cert_id):
         app.logger.error(f'PDF certificate generation failed: {e}')
         flash('Official PDF generation failed. Ensure ReportLab is installed.', 'error')
         return redirect(url_for('verify_by_id', cert_id=cert_id))
+
+
+# ─── Public Academic Transcript & Bundle Routes ───────────────────────────────
+
+@app.route('/transcript/<bundle_id>')
+@limiter.limit("30 per minute")
+def verify_transcript(bundle_id):
+    """Public verification page for academic transcripts and multi-credential portfolios."""
+    ip = request.remote_addr
+    bundle_id = bundle_id.strip().upper()
+    bundle = db.get_bundle(bundle_id)
+    now_str = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+
+    if not bundle:
+        db.log_verification(bundle_id, None, None, 'INVALID', f'Transcript bundle ID {bundle_id} not found.', ip)
+        return render_template('transcript.html', bundle=None, bundle_id=bundle_id), 404
+
+    db.log_verification(bundle_id, None, None, bundle.get('overall_status', 'AUTHENTIC'),
+                        f"Transcript verified: {bundle['title']} ({bundle['total_certs']} credentials)", ip)
+    return render_template('transcript.html', bundle=bundle, bundle_id=bundle_id, verified_at=now_str)
+
+
+@app.route('/download/transcript/<bundle_id>')
+@limiter.limit("20 per minute")
+def download_transcript_pdf(bundle_id):
+    """Generate and stream official portrait vector PDF academic transcript."""
+    bundle_id = bundle_id.strip().upper()
+    bundle = db.get_bundle(bundle_id)
+    if not bundle:
+        flash('Transcript bundle not found.', 'error')
+        return redirect(url_for('index'))
+
+    try:
+        pdf_bytes = transcript_pdf.generate_transcript_pdf(bundle)
+        response = make_response(pdf_bytes)
+        response.headers["Content-Disposition"] = f"attachment; filename=Transcript_{bundle_id}.pdf"
+        response.headers["Content-Type"] = "application/pdf"
+        return response
+    except Exception as e:
+        app.logger.error(f'Transcript PDF generation failed: {e}')
+        flash('Official transcript PDF generation failed. Using web view instead.', 'error')
+        return redirect(url_for('verify_transcript', bundle_id=bundle_id))
 
 
 # ─── Public Verification Badge & Embed Routes ─────────────────────────────────
@@ -837,6 +895,9 @@ def admin_dashboard():
     }
     merkle_meta = merkle.build_merkle_tree(certs)
     analytics = db.get_verification_analytics(days=30)
+    bundles = db.get_all_bundles()
+    unique_recipients = db.get_unique_recipients()
+    today_str = datetime.now().strftime('%Y-%m-%d')
     return render_template('admin.html', logged_in=True,
                            certs=certs, logs=logs, stats=stats,
                            admin_role=admin_role, totp_status=totp_status,
@@ -845,6 +906,9 @@ def admin_dashboard():
                            notification_settings=notification_settings,
                            merkle_meta=merkle_meta,
                            analytics=analytics,
+                           bundles=bundles,
+                           unique_recipients=unique_recipients,
+                           today_str=today_str,
                            active_tab='overview')
 
 
@@ -1331,6 +1395,75 @@ def admin_reactivate(cert_id):
     return redirect(url_for('admin_dashboard') + '?tab=registry')
 
 
+# ─── Admin Academic Transcript Bundle Actions ────────────────────────────────
+
+@app.route('/admin/bundle/create', methods=['POST'])
+@role_required('superadmin', 'issuer')
+def admin_create_bundle():
+    """Create a new cryptographically signed Academic Transcript bundle."""
+    title            = request.form.get('title', '').strip()
+    recipient_name   = request.form.get('recipient_name', '').strip()
+    recipient_email  = request.form.get('recipient_email', '').strip()
+    institution_name = request.form.get('institution_name', '').strip()
+    issue_date       = request.form.get('issue_date', '').strip()
+    cert_ids         = request.form.getlist('cert_ids')
+    if not cert_ids and request.form.get('cert_ids'):
+        cert_ids = [c.strip() for c in request.form.get('cert_ids').split(',') if c.strip()]
+
+    if not recipient_name:
+        flash('Recipient name is required.', 'error')
+        return redirect(url_for('admin_dashboard') + '?tab=transcripts')
+
+    if not cert_ids:
+        flash('Please select at least one certificate to include in the transcript bundle.', 'error')
+        return redirect(url_for('admin_dashboard') + '?tab=transcripts')
+
+    bundle_id = db.create_bundle(
+        title=title,
+        recipient_name=recipient_name,
+        recipient_email=recipient_email,
+        institution_name=institution_name,
+        issue_date=issue_date,
+        cert_ids=cert_ids
+    )
+
+    notifications.trigger_event('TRANSCRIPT_ISSUED', {
+        'bundle_id': bundle_id,
+        'recipient_name': recipient_name,
+        'total_certs': len(cert_ids),
+        'timestamp': datetime.now().isoformat()
+    })
+
+    flash(f'Academic transcript {bundle_id} issued successfully with {len(cert_ids)} credentials and Ed25519 digital signature!', 'success')
+    return redirect(url_for('admin_dashboard') + '?tab=transcripts')
+
+
+@app.route('/admin/bundle/revoke/<bundle_id>', methods=['POST'])
+@role_required('superadmin')
+def admin_revoke_bundle(bundle_id):
+    """Revoke an academic transcript bundle."""
+    bundle_id = bundle_id.strip().upper()
+    db.revoke_bundle(bundle_id)
+    notifications.trigger_event('TRANSCRIPT_REVOKED', {
+        'bundle_id': bundle_id,
+        'revoked_by': session.get('admin_user', 'admin'),
+        'timestamp': datetime.now().isoformat()
+    })
+    flash(f'Transcript bundle {bundle_id} has been revoked.', 'warning')
+    return redirect(url_for('admin_dashboard') + '?tab=transcripts')
+
+
+@app.route('/admin/api/recipient-certs')
+@login_required
+def admin_recipient_certs():
+    """AJAX endpoint: get all certificates matching a student name."""
+    name = request.args.get('name', '').strip()
+    if not name:
+        return jsonify({'success': True, 'certs': []})
+    certs = db.get_recipient_certificates(name)
+    return jsonify({'success': True, 'certs': certs})
+
+
 @app.route('/admin/logout')
 def admin_logout():
     session.clear()
@@ -1533,6 +1666,37 @@ def api_issue_certificate():
         'certificate': cert_record,
         'download_url': f'{BASE_URL}/download/{cert_id}'
     }), 201
+
+
+@app.route('/api/v1/transcript/<bundle_id>', methods=['GET'])
+@limiter.limit("60 per minute")
+def api_get_transcript(bundle_id):
+    """Return JSON representation of academic transcript bundle and cryptographic proofs."""
+    bundle_id = bundle_id.strip().upper()
+    bundle = db.get_bundle(bundle_id)
+    if not bundle:
+        return jsonify({'error': 'Not Found', 'message': f'Transcript bundle {bundle_id} not found.'}), 404
+
+    return jsonify({
+        'success': True,
+        'bundle_id': bundle['bundle_id'],
+        'title': bundle['title'],
+        'recipient_name': bundle['recipient_name'],
+        'recipient_email': bundle.get('recipient_email'),
+        'institution_name': bundle['institution_name'],
+        'issue_date': bundle['issue_date'],
+        'status': bundle['status'],
+        'overall_status': bundle['overall_status'],
+        'overall_reason': bundle['overall_reason'],
+        'total_credentials': bundle['total_certs'],
+        'active_credentials': bundle['active_certs'],
+        'bundle_hash': bundle['bundle_hash'],
+        'signature': bundle.get('signature'),
+        'signature_valid': bundle.get('signature_valid', False),
+        'certificates': bundle['certificates'],
+        'transcript_url': f'{BASE_URL}/transcript/{bundle_id}',
+        'pdf_download_url': f'{BASE_URL}/download/transcript/{bundle_id}'
+    }), 200
 
 
 # ─── App Entry ────────────────────────────────────────────────────────────────
