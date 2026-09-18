@@ -1,0 +1,165 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>CertValid Verified Credential — {{ cert.cert_id if cert else 'Not Found' }}</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+      background: {% if request.args.get('theme') == 'light' %}#f8fafc{% else %}#0a0f1d{% endif %};
+      color: {% if request.args.get('theme') == 'light' %}#0f172a{% else %}#f8fafc{% endif %};
+      padding: 12px;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      min-height: 100vh;
+    }
+    .embed-card {
+      width: 100%;
+      max-width: 400px;
+      background: {% if request.args.get('theme') == 'light' %}#ffffff{% else %}#111827{% endif %};
+      border: 1px solid {% if request.args.get('theme') == 'light' %}#e2e8f0{% else %}#1f2937{% endif %};
+      border-radius: 12px;
+      padding: 16px;
+      box-shadow: 0 4px 20px rgba(0,0,0,0.25);
+      position: relative;
+      overflow: hidden;
+    }
+    .embed-accent-bar {
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      height: 4px;
+      background: {% if status == 'AUTHENTIC' %}linear-gradient(90deg, #10b981, #06b6d4){% elif status == 'REVOKED' %}#ef4444{% elif status == 'EXPIRED' %}#f59e0b{% else %}#64748b{% endif %};
+    }
+    .embed-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 12px;
+    }
+    .embed-brand {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 0.82rem;
+      font-weight: 700;
+      color: {% if request.args.get('theme') == 'light' %}#2563eb{% else %}#38bdf8{% endif %};
+      letter-spacing: 0.5px;
+    }
+    .embed-badge {
+      font-size: 0.72rem;
+      font-weight: 700;
+      padding: 3px 8px;
+      border-radius: 9999px;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      {% if status == 'AUTHENTIC' %}
+        background: rgba(16, 185, 129, 0.15);
+        color: #10b981;
+        border: 1px solid #10b981;
+      {% elif status == 'REVOKED' %}
+        background: rgba(239, 68, 68, 0.15);
+        color: #ef4444;
+        border: 1px solid #ef4444;
+      {% elif status == 'EXPIRED' %}
+        background: rgba(245, 158, 11, 0.15);
+        color: #f59e0b;
+        border: 1px solid #f59e0b;
+      {% else %}
+        background: rgba(100, 116, 139, 0.15);
+        color: #64748b;
+        border: 1px solid #64748b;
+      {% endif %}
+    }
+    .embed-name {
+      font-size: 1.1rem;
+      font-weight: 700;
+      margin-bottom: 4px;
+      color: {% if request.args.get('theme') == 'light' %}#0f172a{% else %}#ffffff{% endif %};
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .embed-course {
+      font-size: 0.86rem;
+      color: {% if request.args.get('theme') == 'light' %}#475569{% else %}#94a3b8{% endif %};
+      margin-bottom: 12px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .embed-footer {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding-top: 10px;
+      border-top: 1px solid {% if request.args.get('theme') == 'light' %}#f1f5f9{% else %}#1f2937{% endif %};
+      font-size: 0.75rem;
+    }
+    .embed-id {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      color: {% if request.args.get('theme') == 'light' %}#64748b{% else %}#64748b{% endif %};
+    }
+    .embed-link {
+      color: {% if request.args.get('theme') == 'light' %}#2563eb{% else %}#38bdf8{% endif %};
+      text-decoration: none;
+      font-weight: 600;
+      display: flex;
+      align-items: center;
+      gap: 3px;
+    }
+    .embed-link:hover {
+      text-decoration: underline;
+    }
+  </style>
+</head>
+<body>
+
+  <div class="embed-card">
+    <div class="embed-accent-bar"></div>
+
+    <div class="embed-header">
+      <div class="embed-brand">
+        <span>🛡️</span>
+        <span>CERTVALID</span>
+      </div>
+      <div class="embed-badge">
+        {% if status == 'AUTHENTIC' %}
+          ✓ Verified
+        {% elif status == 'REVOKED' %}
+          ✗ Revoked
+        {% elif status == 'EXPIRED' %}
+          ⏳ Expired
+        {% else %}
+          ? Unknown
+        {% endif %}
+      </div>
+    </div>
+
+    {% if cert %}
+      <div class="embed-name">{{ cert.student_name }}</div>
+      <div class="embed-course">{{ cert.course_name }} • {{ cert.issuer_name }}</div>
+      <div class="embed-footer">
+        <span class="embed-id">{{ cert.cert_id }}</span>
+        <a href="{{ url_for('verify_by_id', cert_id=cert.cert_id, _external=True) }}" target="_blank" rel="noopener" class="embed-link">
+          Verify Record ↗
+        </a>
+      </div>
+    {% else %}
+      <div class="embed-name" style="color:#ef4444;">Certificate Not Found</div>
+      <div class="embed-course">The specified credential ID does not exist in the public registry.</div>
+      <div class="embed-footer">
+        <span class="embed-id">ID: {{ cert_id }}</span>
+        <a href="{{ url_for('index', _external=True) }}" target="_blank" rel="noopener" class="embed-link">
+          CertValid Portal ↗
+        </a>
+      </div>
+    {% endif %}
+  </div>
+
+</body>
+</html>
