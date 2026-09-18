@@ -12,6 +12,7 @@ import os
 import io
 import re
 import base64
+import json
 from datetime import datetime
 from PIL import Image
 import imagehash
@@ -123,6 +124,19 @@ def verify_payload_signature(payload_str: str, signature_b64: str) -> bool:
         return True
     except Exception:
         return False
+
+
+def build_bundle_payload(bundle_id: str, title: str, recipient_name: str, institution_name: str, issue_date: str, cert_ids: list) -> str:
+    """Construct canonical string payload for academic transcript bundle signing & hashing."""
+    sorted_ids = sorted([str(cid).strip().upper() for cid in cert_ids if cid])
+    return f"{bundle_id.strip().upper()}|{title.strip()}|{recipient_name.strip()}|{institution_name.strip()}|{issue_date.strip()}|{','.join(sorted_ids)}"
+
+
+def compute_bundle_hash(bundle_id: str, title: str, recipient_name: str, institution_name: str, issue_date: str, cert_ids: list) -> str:
+    """Compute SHA-256 hash of canonical bundle payload."""
+    payload = build_bundle_payload(bundle_id, title, recipient_name, institution_name, issue_date, cert_ids)
+    return hashlib.sha256(payload.encode('utf-8')).hexdigest()
+
 
 
 # ─── Password Hashing (PBKDF2 + salt) ────────────────────────────────────────
@@ -251,6 +265,25 @@ def init_db():
         )
     ''')
 
+    # Credential Bundles & Academic Transcripts table
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS credential_bundles (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            bundle_id TEXT UNIQUE NOT NULL,
+            title TEXT NOT NULL,
+            recipient_name TEXT NOT NULL,
+            recipient_email TEXT,
+            institution_name TEXT NOT NULL,
+            issue_date TEXT NOT NULL,
+            cert_ids TEXT NOT NULL,
+            bundle_hash TEXT NOT NULL,
+            signature TEXT,
+            status TEXT NOT NULL DEFAULT 'active',
+            created_at TEXT NOT NULL
+        )
+    ''')
+    c.execute('CREATE INDEX IF NOT EXISTS idx_bundle_recipient ON credential_bundles(recipient_name)')
+
     # Seed default admin with secure PBKDF2 hash & superadmin role
     existing_admin = c.execute(
         'SELECT id FROM admin_users WHERE username = ?', ('admin',)
@@ -271,6 +304,15 @@ def init_db():
             'issue_date': '2024-05-15',
             'issuer_name': 'National Institute of Technology',
             'file_hash': hashlib.sha256(b'CERT-2024-001-SAMPLE-HASH').hexdigest(),
+            'status': 'active',
+        },
+        {
+            'cert_id': 'CERT-2024-004',
+            'student_name': 'Aisha Sharma',
+            'course_name': 'Advanced Cloud Architecture & Security',
+            'issue_date': '2024-06-10',
+            'issuer_name': 'National Institute of Technology',
+            'file_hash': hashlib.sha256(b'CERT-2024-004-SAMPLE-HASH').hexdigest(),
             'status': 'active',
         },
         {
@@ -309,6 +351,27 @@ def init_db():
                   s['issue_date'], s['issuer_name'], s['file_hash'],
                   sig, s['status'], now))
 
+    # Seed sample transcript bundle if empty
+    try:
+        bundle_count = c.execute('SELECT COUNT(*) FROM credential_bundles').fetchone()[0]
+        if bundle_count == 0:
+            b_id = 'TR-2024-001'
+            b_title = 'B.Tech Computer Science & Cloud Architecture Transcript'
+            b_recipient = 'Aisha Sharma'
+            b_email = 'aisha.sharma@nit.edu'
+            b_inst = 'National Institute of Technology'
+            b_date = '2024-06-15'
+            b_cids = ['CERT-2024-001', 'CERT-2024-004']
+            b_hash = compute_bundle_hash(b_id, b_title, b_recipient, b_inst, b_date, b_cids)
+            b_sig = sign_payload(b_hash)
+            c.execute('''
+                INSERT INTO credential_bundles
+                (bundle_id, title, recipient_name, recipient_email, institution_name, issue_date, cert_ids, bundle_hash, signature, status, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?)
+            ''', (b_id, b_title, b_recipient, b_email, b_inst, b_date, json.dumps(b_cids), b_hash, b_sig, now))
+    except Exception:
+        pass
+
     # Seed sample verification logs if empty
     try:
         log_count = c.execute('SELECT COUNT(*) FROM verification_logs').fetchone()[0]
@@ -317,7 +380,7 @@ def init_db():
             sample_logs = [
                 ('CERT-2024-001', 'cert_001.png', samples[0]['file_hash'], 'AUTHENTIC', 'Exact SHA-256 hash match', 6, '192.168.1.10'),
                 ('CERT-2024-001', None, None, 'AUTHENTIC', 'Direct ID verification: CERT-2024-001', 5, '10.0.0.12'),
-                ('CERT-2024-002', 'cert_rahul.jpg', samples[1]['file_hash'], 'AUTHENTIC', 'pHash visual match (distance: 2, similarity: 96.9%)', 4, '172.16.0.4'),
+                ('CERT-2024-002', 'cert_rahul.jpg', samples[2]['file_hash'], 'AUTHENTIC', 'pHash visual match (distance: 2, similarity: 96.9%)', 4, '172.16.0.4'),
                 ('CERT-2024-002', None, None, 'AUTHENTIC', 'QR scan: certificate verified.', 3, '192.168.1.25'),
                 ('CERT-2023-099', None, None, 'REVOKED', 'Direct ID verification: Certificate REVOKED.', 2, '10.0.0.8'),
                 ('UNKNOWN-123', 'fake_cert.png', 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855', 'INVALID', 'No matching certificate found by SHA-256 or pHash.', 1, '203.0.113.42'),
@@ -640,6 +703,191 @@ def reactivate_certificate(cert_id):
     conn.execute("UPDATE certificates SET status = 'active' WHERE cert_id = ?", (cert_id,))
     conn.commit()
     conn.close()
+
+
+# ─── Academic Transcripts & Credential Bundles ────────────────────────────
+
+def generate_bundle_id() -> str:
+    """Generate a unique academic transcript bundle ID like TR-2026-XXXXXX."""
+    year = datetime.now().year
+    unique = str(uuid.uuid4()).replace('-', '').upper()[:6]
+    return f'TR-{year}-{unique}'
+
+
+def create_bundle(title: str, recipient_name: str, recipient_email: str, institution_name: str, issue_date: str, cert_ids: list, bundle_id: str = None) -> str:
+    """Create a new academic transcript bundle with Ed25519 signature."""
+    if not bundle_id:
+        bundle_id = generate_bundle_id()
+    else:
+        bundle_id = bundle_id.strip().upper()
+
+    title = (title or "Academic Transcript").strip()
+    recipient_name = recipient_name.strip()
+    recipient_email = (recipient_email or '').strip()
+    institution_name = (institution_name or "CertValid Academic Board").strip()
+    issue_date = issue_date.strip() if issue_date else datetime.now().strftime('%Y-%m-%d')
+    sorted_cert_ids = sorted(list(set(str(cid).strip().upper() for cid in cert_ids if cid)))
+
+    bundle_hash = compute_bundle_hash(bundle_id, title, recipient_name, institution_name, issue_date, sorted_cert_ids)
+    sig = sign_payload(bundle_hash)
+    now = datetime.now().isoformat(sep=' ', timespec='seconds')
+    cert_ids_json = json.dumps(sorted_cert_ids)
+
+    conn = get_db()
+    conn.execute('''
+        INSERT INTO credential_bundles
+        (bundle_id, title, recipient_name, recipient_email, institution_name, issue_date, cert_ids, bundle_hash, signature, status, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?)
+    ''', (bundle_id, title, recipient_name, recipient_email, institution_name, issue_date, cert_ids_json, bundle_hash, sig, now))
+    conn.commit()
+    conn.close()
+    return bundle_id
+
+
+def get_bundle(bundle_id: str) -> dict:
+    """Fetch an academic transcript bundle with resolved certificates, metrics, and signature verification."""
+    if not bundle_id:
+        return None
+    bundle_id = bundle_id.strip().upper()
+    conn = get_db()
+    row = conn.execute('SELECT * FROM credential_bundles WHERE bundle_id = ?', (bundle_id,)).fetchone()
+    conn.close()
+    if not row:
+        return None
+
+    b = dict(row)
+    try:
+        cert_ids = json.loads(b.get('cert_ids', '[]'))
+    except Exception:
+        cert_ids = [cid.strip() for cid in b.get('cert_ids', '').split(',') if cid.strip()]
+
+    resolved_certs = []
+    for cid in cert_ids:
+        cert = get_certificate_by_id(cid)
+        if cert:
+            resolved_certs.append(cert)
+        else:
+            resolved_certs.append({
+                'cert_id': cid,
+                'student_name': b['recipient_name'],
+                'course_name': 'Unknown / Unregistered Credential',
+                'issue_date': 'N/A',
+                'issuer_name': b['institution_name'],
+                'status': 'missing',
+                'effective_status': 'missing',
+                'is_expired': False
+            })
+
+    total_certs = len(resolved_certs)
+    active_certs = sum(1 for c in resolved_certs if c.get('effective_status') == 'active')
+    revoked_certs = sum(1 for c in resolved_certs if c.get('status') == 'revoked')
+    expired_certs = sum(1 for c in resolved_certs if c.get('effective_status') == 'expired')
+
+    expected_hash = compute_bundle_hash(b['bundle_id'], b['title'], b['recipient_name'], b['institution_name'], b['issue_date'], cert_ids)
+    hash_valid = (expected_hash == b['bundle_hash'])
+    sig_valid = verify_payload_signature(b['bundle_hash'], b.get('signature', ''))
+
+    if b.get('status') == 'revoked':
+        overall_status = 'REVOKED'
+        overall_reason = 'This transcript bundle has been officially revoked.'
+    elif revoked_certs > 0:
+        overall_status = 'CONTAINS_REVOKED'
+        overall_reason = f'Warning: {revoked_certs} credential(s) in this transcript have been revoked.'
+    elif expired_certs > 0 and active_certs == 0:
+        overall_status = 'EXPIRED'
+        overall_reason = 'All credentials in this transcript have expired.'
+    elif not hash_valid or not sig_valid:
+        overall_status = 'TAMPERED'
+        overall_reason = 'Cryptographic integrity check failed for this transcript.'
+    else:
+        overall_status = 'AUTHENTIC'
+        overall_reason = 'All credentials verified and cryptographically authentic.'
+
+    b['cert_ids_list'] = cert_ids
+    b['certificates'] = resolved_certs
+    b['total_certs'] = total_certs
+    b['active_certs'] = active_certs
+    b['revoked_certs'] = revoked_certs
+    b['expired_certs'] = expired_certs
+    b['hash_valid'] = hash_valid
+    b['signature_valid'] = sig_valid
+    b['overall_status'] = overall_status
+    b['overall_reason'] = overall_reason
+    return b
+
+
+def get_all_bundles() -> list:
+    """Fetch all transcript bundles with item counts and status overview."""
+    conn = get_db()
+    rows = conn.execute('SELECT * FROM credential_bundles ORDER BY id DESC').fetchall()
+    conn.close()
+    bundles = []
+    for r in rows:
+        b = dict(r)
+        try:
+            cids = json.loads(b.get('cert_ids', '[]'))
+        except Exception:
+            cids = []
+        b['cert_count'] = len(cids)
+        bundles.append(b)
+    return bundles
+
+
+def revoke_bundle(bundle_id: str):
+    """Set an academic transcript bundle status to revoked."""
+    bundle_id = bundle_id.strip().upper()
+    conn = get_db()
+    conn.execute("UPDATE credential_bundles SET status = 'revoked' WHERE bundle_id = ?", (bundle_id,))
+    conn.commit()
+    conn.close()
+
+
+def reactivate_bundle(bundle_id: str):
+    """Set an academic transcript bundle status back to active."""
+    bundle_id = bundle_id.strip().upper()
+    conn = get_db()
+    conn.execute("UPDATE credential_bundles SET status = 'active' WHERE bundle_id = ?", (bundle_id,))
+    conn.commit()
+    conn.close()
+
+
+def get_recipient_certificates(recipient_name: str) -> list:
+    """Fetch all certificates matching recipient name."""
+    if not recipient_name:
+        return []
+    conn = get_db()
+    term = f"%{recipient_name.strip().lower()}%"
+    rows = conn.execute(
+        "SELECT * FROM certificates WHERE LOWER(student_name) LIKE ? ORDER BY issue_date DESC",
+        (term,)
+    ).fetchall()
+    conn.close()
+    return [check_cert_expiry(dict(r)) for r in rows]
+
+
+def get_bundles_for_cert(cert_id: str) -> list:
+    """Find any transcript bundles containing the specified certificate ID."""
+    if not cert_id:
+        return []
+    cert_id = cert_id.strip().upper()
+    conn = get_db()
+    rows = conn.execute("SELECT * FROM credential_bundles WHERE cert_ids LIKE ?", (f'%"{cert_id}"%',)).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+def get_unique_recipients() -> list:
+    """Fetch distinct recipient names with certificate counts for auto-suggestion."""
+    conn = get_db()
+    rows = conn.execute('''
+        SELECT student_name, COUNT(*) as cert_count
+        FROM certificates
+        GROUP BY student_name
+        ORDER BY cert_count DESC, student_name ASC
+    ''').fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
 
 
 # ─── Verification Logs ────────────────────────────────────────────────────────
@@ -1051,6 +1299,7 @@ def export_database_json() -> str:
     """
     conn = get_db()
     certs = [dict(r) for r in conn.execute("SELECT * FROM certificates ORDER BY id ASC").fetchall()]
+    bundles = [dict(r) for r in conn.execute("SELECT * FROM credential_bundles ORDER BY id ASC").fetchall()]
     logs  = [dict(r) for r in conn.execute("SELECT * FROM audit_logs ORDER BY id ASC").fetchall()]
     keys  = [dict(r) for r in conn.execute("SELECT id, key_name, api_key, created_at, status FROM api_keys ORDER BY id ASC").fetchall()]
     sets  = [dict(r) for r in conn.execute("SELECT * FROM system_settings ORDER BY key ASC").fetchall()]
@@ -1058,6 +1307,7 @@ def export_database_json() -> str:
 
     payload = {
         'certificates': certs,
+        'credential_bundles': bundles,
         'audit_logs': logs,
         'api_keys': keys,
         'system_settings': sets
@@ -1072,6 +1322,7 @@ def export_database_json() -> str:
         'exported_at': datetime.now().isoformat(),
         'record_counts': {
             'certificates': len(certs),
+            'credential_bundles': len(bundles),
             'audit_logs': len(logs),
             'api_keys': len(keys),
             'system_settings': len(sets)
@@ -1085,7 +1336,7 @@ def export_database_json() -> str:
 def restore_database_json(snapshot_dict: dict) -> dict:
     """
     Validate and restore database snapshot from parsed JSON object.
-    Merges records safely into certificates, audit_logs, and system_settings.
+    Merges records safely into certificates, credential_bundles, audit_logs, and system_settings.
     """
     if not isinstance(snapshot_dict, dict) or 'data' not in snapshot_dict or 'checksum_sha256' not in snapshot_dict:
         return {'success': False, 'message': 'Invalid snapshot format: missing data or checksum.'}
@@ -1102,6 +1353,7 @@ def restore_database_json(snapshot_dict: dict) -> dict:
     c = conn.cursor()
 
     restored_certs = 0
+    restored_bundles = 0
     restored_logs = 0
 
     # Restore Certificates
@@ -1126,6 +1378,29 @@ def restore_database_json(snapshot_dict: dict) -> dict:
             cert.get('expires_at')
         ))
         restored_certs += 1
+
+    # Restore Credential Bundles
+    for b in data.get('credential_bundles', []):
+        c.execute('''
+            INSERT INTO credential_bundles (bundle_id, title, recipient_name, recipient_email, institution_name, issue_date, cert_ids, bundle_hash, signature, status, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(bundle_id) DO UPDATE SET
+              title = excluded.title,
+              recipient_name = excluded.recipient_name,
+              recipient_email = excluded.recipient_email,
+              institution_name = excluded.institution_name,
+              issue_date = excluded.issue_date,
+              cert_ids = excluded.cert_ids,
+              bundle_hash = excluded.bundle_hash,
+              signature = excluded.signature,
+              status = excluded.status
+        ''', (
+            b.get('bundle_id'), b.get('title'), b.get('recipient_name'),
+            b.get('recipient_email'), b.get('institution_name'), b.get('issue_date'),
+            b.get('cert_ids'), b.get('bundle_hash'), b.get('signature'),
+            b.get('status', 'active'), b.get('created_at', datetime.now().isoformat())
+        ))
+        restored_bundles += 1
 
     # Restore Settings
     for st in data.get('system_settings', []):

@@ -1,0 +1,451 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{% if bundle %}{{ bundle.title }} — Verified Academic Transcript{% else %}Transcript Not Found{% endif %} — CertValid</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+  <style>
+    .transcript-container {
+      max-width: 960px;
+      margin: 0 auto;
+      padding: 2rem 1.5rem 5rem;
+    }
+    .transcript-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-lg);
+      padding: 2.5rem;
+      backdrop-filter: blur(16px);
+      -webkit-backdrop-filter: blur(16px);
+      box-shadow: var(--shadow);
+      position: relative;
+      overflow: hidden;
+    }
+    .transcript-card::before {
+      content: '';
+      position: absolute;
+      top: 0; left: 0; right: 0;
+      height: 5px;
+      background: linear-gradient(90deg, var(--indigo), var(--emerald), var(--gold));
+    }
+    .transcript-header {
+      text-align: center;
+      padding-bottom: 2rem;
+      border-bottom: 1px solid var(--border);
+      margin-bottom: 2rem;
+    }
+    .inst-seal {
+      font-size: 3rem;
+      margin-bottom: .5rem;
+      display: inline-block;
+    }
+    .inst-name {
+      font-size: 1.35rem;
+      font-weight: 700;
+      letter-spacing: .03em;
+      color: var(--text);
+      text-transform: uppercase;
+      margin-bottom: .25rem;
+    }
+    .transcript-tagline {
+      font-size: .85rem;
+      font-weight: 600;
+      color: var(--gold);
+      letter-spacing: .1em;
+      text-transform: uppercase;
+      margin-bottom: .5rem;
+    }
+    .transcript-main-title {
+      font-size: 1.75rem;
+      font-weight: 800;
+      color: var(--text);
+      margin-top: .75rem;
+    }
+    .meta-pills {
+      display: flex;
+      justify-content: center;
+      gap: 1.5rem;
+      margin-top: 1rem;
+      flex-wrap: wrap;
+      font-size: .85rem;
+      color: var(--text-muted);
+    }
+    .meta-pills span {
+      display: flex;
+      align-items: center;
+      gap: .35rem;
+    }
+    .summary-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+      gap: 1rem;
+      margin-bottom: 2rem;
+    }
+    .summary-card {
+      background: rgba(255,255,255,0.03);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 1.25rem;
+    }
+    .summary-label {
+      font-size: .75rem;
+      text-transform: uppercase;
+      letter-spacing: .05em;
+      color: var(--text-muted);
+      margin-bottom: .35rem;
+    }
+    .summary-value {
+      font-size: 1.1rem;
+      font-weight: 700;
+      color: var(--text);
+    }
+    .action-bar {
+      display: flex;
+      gap: .75rem;
+      flex-wrap: wrap;
+      margin-bottom: 2rem;
+      justify-content: flex-end;
+    }
+    .table-wrap {
+      overflow-x: auto;
+      margin-bottom: 2.5rem;
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+    }
+    .transcript-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: .9rem;
+      text-align: left;
+    }
+    .transcript-table th {
+      background: rgba(255,255,255,0.06);
+      padding: .85rem 1rem;
+      color: var(--text-muted);
+      font-weight: 600;
+      font-size: .8rem;
+      text-transform: uppercase;
+      letter-spacing: .04em;
+      border-bottom: 1px solid var(--border);
+    }
+    .transcript-table td {
+      padding: 1rem;
+      border-bottom: 1px solid rgba(255,255,255,0.05);
+      vertical-align: middle;
+    }
+    .transcript-table tr:hover {
+      background: rgba(255,255,255,0.02);
+    }
+    .crypto-attestation-card {
+      background: rgba(15,23,42,0.6);
+      border: 1px solid rgba(99,102,241,0.25);
+      border-radius: var(--radius);
+      padding: 1.5rem;
+      display: flex;
+      gap: 1.5rem;
+      align-items: center;
+      flex-wrap: wrap;
+    }
+    .crypto-details {
+      flex: 1;
+      min-width: 260px;
+    }
+    .hash-snippet {
+      font-family: monospace;
+      font-size: .8rem;
+      color: var(--indigo-light);
+      background: rgba(0,0,0,0.3);
+      padding: .35rem .6rem;
+      border-radius: 6px;
+      word-break: break-all;
+      display: inline-block;
+      margin-top: .25rem;
+    }
+    .qr-box {
+      background: #ffffff;
+      padding: .6rem;
+      border-radius: var(--radius);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+    }
+    .qr-box img {
+      width: 110px;
+      height: 110px;
+      display: block;
+    }
+
+    /* ── Print Stylesheet ── */
+    @media print {
+      body {
+        background: #ffffff !important;
+        color: #0f172a !important;
+        font-family: 'Times New Roman', serif !important;
+      }
+      .navbar, .action-bar, .no-print {
+        display: none !important;
+      }
+      .transcript-container {
+        padding: 0 !important;
+        max-width: 100% !important;
+      }
+      .transcript-card {
+        background: none !important;
+        border: 2px solid #0f172a !important;
+        border-radius: 0 !important;
+        box-shadow: none !important;
+        padding: 2rem !important;
+        color: #0f172a !important;
+      }
+      .transcript-card::before { display: none !important; }
+      .inst-name, .transcript-main-title, .summary-value {
+        color: #0f172a !important;
+      }
+      .summary-card {
+        background: none !important;
+        border: 1px solid #cbd5e1 !important;
+      }
+      .transcript-table th {
+        background: #f1f5f9 !important;
+        color: #0f172a !important;
+      }
+      .transcript-table td {
+        border-bottom: 1px solid #cbd5e1 !important;
+        color: #0f172a !important;
+      }
+      .crypto-attestation-card {
+        background: #f8fafc !important;
+        border: 1px solid #94a3b8 !important;
+        color: #0f172a !important;
+      }
+      .hash-snippet {
+        color: #0f172a !important;
+        background: none !important;
+      }
+      a { color: #0f172a !important; text-decoration: none !important; }
+    }
+  </style>
+</head>
+<body>
+
+<!-- Navbar -->
+<nav class="navbar">
+  <div class="navbar-brand">
+    <div class="logo-icon">🛡️</div>
+    CertValid
+  </div>
+  <div class="navbar-links">
+    <a href="{{ url_for('index') }}">🔍 Public Portal</a>
+    <a href="{{ url_for('admin') }}">🔐 Admin</a>
+  </div>
+</nav>
+
+<div class="transcript-container">
+
+  {% if not bundle %}
+  <!-- Transcript Not Found -->
+  <div class="transcript-card" style="text-align:center; padding: 4rem 2rem;">
+    <div style="font-size:3.5rem; margin-bottom:1rem;">📂</div>
+    <h1 style="font-size:1.8rem; margin-bottom:1rem;">Transcript Bundle Not Found</h1>
+    <p style="color:var(--text-muted); max-width:520px; margin:0 auto 2rem;">
+      No academic transcript or credential bundle matches ID <code>{{ bundle_id }}</code>.
+      Please verify the identifier and try again.
+    </p>
+    <a href="{{ url_for('index') }}" class="btn btn-primary">← Return to Search</a>
+  </div>
+
+  {% else %}
+
+  <!-- Action Bar -->
+  <div class="action-bar no-print">
+    <button type="button" onclick="window.print()" class="btn btn-ghost btn-sm">
+      🖨️ Print Transcript
+    </button>
+    <a href="{{ url_for('download_transcript_pdf', bundle_id=bundle.bundle_id) }}" class="btn btn-primary btn-sm">
+      📄 Download Official PDF
+    </a>
+    <button type="button" onclick="copyShareUrl()" id="copy-btn" class="btn btn-ghost btn-sm">
+      🔗 Copy Verification Link
+    </button>
+  </div>
+
+  <!-- Transcript Card -->
+  <div class="transcript-card fade-in-up">
+
+    <!-- Header -->
+    <div class="transcript-header">
+      <div class="inst-seal">🏛️</div>
+      <div class="inst-name">{{ bundle.institution_name }}</div>
+      <div class="transcript-tagline">Official Cryptographic Academic Transcript</div>
+      <h1 class="transcript-main-title">{{ bundle.title }}</h1>
+      <div class="meta-pills">
+        <span>📜 <strong>Transcript ID:</strong> {{ bundle.bundle_id }}</span>
+        <span>📅 <strong>Issued:</strong> {{ bundle.issue_date }}</span>
+        <span>
+          {% if bundle.overall_status == 'AUTHENTIC' %}
+            <span class="badge badge-authentic" style="font-size:.8rem;">✅ ALL CREDENTIALS VERIFIED</span>
+          {% elif bundle.overall_status == 'REVOKED' %}
+            <span class="badge badge-revoked" style="font-size:.8rem;">🚫 TRANSCRIPT REVOKED</span>
+          {% elif bundle.overall_status == 'CONTAINS_REVOKED' %}
+            <span class="badge badge-invalid" style="font-size:.8rem;">⚠️ CONTAINS REVOKED COURSE</span>
+          {% elif bundle.overall_status == 'EXPIRED' %}
+            <span class="badge badge-warning" style="font-size:.8rem;">⏳ EXPIRED TRANSCRIPT</span>
+          {% else %}
+            <span class="badge badge-invalid" style="font-size:.8rem;">{{ bundle.overall_status }}</span>
+          {% endif %}
+        </span>
+      </div>
+    </div>
+
+    <!-- Candidate Profile Summary Cards -->
+    <div class="summary-grid">
+      <div class="summary-card">
+        <div class="summary-label">Candidate / Recipient</div>
+        <div class="summary-value">{{ bundle.recipient_name }}</div>
+        {% if bundle.recipient_email %}
+          <div style="font-size:.8rem; color:var(--text-muted); margin-top:.2rem;">{{ bundle.recipient_email }}</div>
+        {% endif %}
+      </div>
+      <div class="summary-card">
+        <div class="summary-label">Total Credentials</div>
+        <div class="summary-value">{{ bundle.total_certs }} Award(s)</div>
+        <div style="font-size:.8rem; color:var(--emerald-light); margin-top:.2rem;">
+          {{ bundle.active_certs }} Active / Verified
+        </div>
+      </div>
+      <div class="summary-card">
+        <div class="summary-label">Issuing Authority</div>
+        <div class="summary-value" style="font-size:.95rem;">{{ bundle.institution_name }}</div>
+        <div style="font-size:.8rem; color:var(--text-muted); margin-top:.2rem;">Accredited Registrar</div>
+      </div>
+      <div class="summary-card">
+        <div class="summary-label">Cryptographic Integrity</div>
+        <div class="summary-value" style="color:var(--emerald-light); font-size:.95rem;">
+          {% if bundle.signature_valid %}
+            🛡️ Ed25519 Signed
+          {% else %}
+            ⚠️ Unverified Signature
+          {% endif %}
+        </div>
+        <div style="font-size:.8rem; color:var(--text-muted); margin-top:.2rem;">SHA-256 Digest Match</div>
+      </div>
+    </div>
+
+    <!-- Itemized Credential Table -->
+    <h3 style="margin-bottom:1rem; font-size:1.1rem; display:flex; align-items:center; gap:.5rem;">
+      <span>📋</span> Itemized Academic Credentials
+    </h3>
+    <div class="table-wrap">
+      <table class="transcript-table">
+        <thead>
+          <tr>
+            <th style="width:40px;">#</th>
+            <th>Qualification / Course Title</th>
+            <th>Credential ID</th>
+            <th>Issue Date</th>
+            <th>Validity</th>
+            <th>Status</th>
+            <th class="no-print" style="text-align:right;">Verification</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for cert in bundle.certificates %}
+          <tr>
+            <td style="color:var(--text-muted);">{{ loop.index }}</td>
+            <td>
+              <strong>{{ cert.course_name }}</strong>
+              <div style="font-size:.75rem; color:var(--text-muted);">{{ cert.issuer_name }}</div>
+            </td>
+            <td>
+              <code style="color:var(--indigo-light); font-weight:600;">{{ cert.cert_id }}</code>
+            </td>
+            <td>{{ cert.issue_date }}</td>
+            <td>
+              {% if cert.expires_at %}
+                {% if cert.is_expired %}
+                  <span style="color:#fbbf24; font-size:.8rem;">Expired</span>
+                {% else %}
+                  <span style="font-size:.8rem;">Until {{ cert.expires_at }}</span>
+                {% endif %}
+              {% else %}
+                <span style="color:var(--emerald-light); font-size:.8rem;">Lifetime</span>
+              {% endif %}
+            </td>
+            <td>
+              {% if cert.status == 'revoked' %}
+                <span class="badge badge-revoked" style="font-size:.75rem;">Revoked</span>
+              {% elif cert.effective_status == 'expired' %}
+                <span class="badge badge-warning" style="font-size:.75rem;">Expired</span>
+              {% else %}
+                <span class="badge badge-authentic" style="font-size:.75rem;">Active</span>
+              {% endif %}
+            </td>
+            <td class="no-print" style="text-align:right;">
+              <a href="{{ url_for('verify_by_id', cert_id=cert.cert_id) }}" class="btn btn-ghost btn-sm" style="font-size:.75rem; padding:.25rem .6rem;">
+                Verify Record →
+              </a>
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+
+    <!-- Cryptographic Attestation Block -->
+    <div class="crypto-attestation-card">
+      <div class="qr-box">
+        <img src="{{ url_for('static', filename='qr/' + bundle.bundle_id + '.png') }}"
+             onerror="this.src='https://api.qrserver.com/v1/create-qr-code/?size=110x110&data={{ url_for('verify_transcript', bundle_id=bundle.bundle_id, _external=True) | urlencode }}'"
+             alt="Transcript Verification QR">
+      </div>
+      <div class="crypto-details">
+        <div style="font-weight:700; font-size:.95rem; margin-bottom:.35rem; color:var(--text);">
+          🛡️ Cryptographic Integrity & Root Attestation
+        </div>
+        <p style="font-size:.8rem; color:var(--text-muted); margin-bottom:.75rem;">
+          This official multi-credential academic transcript is cryptographically sealed by CertValid.
+          All member certificates are hashed into a canonical root digest and signed using the institutional Ed25519 private key.
+        </p>
+        <div style="display:grid; grid-template-columns: 1fr; gap:.5rem;">
+          <div>
+            <span style="font-size:.75rem; color:var(--text-muted); text-transform:uppercase;">Root Bundle SHA-256 Digest:</span><br>
+            <span class="hash-snippet">{{ bundle.bundle_hash }}</span>
+          </div>
+          <div>
+            <span style="font-size:.75rem; color:var(--text-muted); text-transform:uppercase;">Ed25519 Asymmetric Signature:</span><br>
+            <span class="hash-snippet" style="color:var(--emerald-light);">{{ bundle.signature }}</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Footer Sign-off for Print -->
+    <div style="margin-top:2.5rem; text-align:center; padding-top:1.5rem; border-top:1px solid var(--border); font-size:.8rem; color:var(--text-muted);">
+      <div>Accredited by CertValid Decentralized & Asymmetric Verification Protocol</div>
+      <div style="font-size:.75rem; color:var(--text-dim); margin-top:.25rem;">
+        Verification URL: <code>{{ url_for('verify_transcript', bundle_id=bundle.bundle_id, _external=True) }}</code>
+      </div>
+    </div>
+
+  </div>
+
+  {% endif %}
+
+</div>
+
+<script>
+function copyShareUrl() {
+  const url = window.location.href;
+  navigator.clipboard.writeText(url).then(() => {
+    const btn = document.getElementById('copy-btn');
+    const oldText = btn.innerText;
+    btn.innerText = '✅ Link Copied!';
+    setTimeout(() => { btn.innerText = oldText; }, 2000);
+  });
+}
+</script>
+
+</body>
+</html>

@@ -161,6 +161,7 @@
         <button class="admin-tab" id="tab-bulk-btn"     onclick="showTab('bulk')">📦 Bulk Issue</button>
       {% endif %}
       <button class="admin-tab" id="tab-registry-btn" onclick="showTab('registry')">📋 Registry</button>
+      <button class="admin-tab" id="tab-transcripts-btn" onclick="showTab('transcripts')">🎓 Transcripts & Bundles</button>
       <button class="admin-tab" id="tab-logs-btn"     onclick="showTab('logs')">📜 Audit Logs</button>
       <button class="admin-tab" id="tab-security-btn" onclick="showTab('security')">🔐 Security (2FA)</button>
       {% if admin_role == 'superadmin' %}
@@ -1042,6 +1043,195 @@
       </div>
     </div>
 
+    <!-- ── Academic Transcripts & Credential Bundles Tab ── -->
+    <div class="admin-tab-pane" id="tab-transcripts" style="display:none;">
+      
+      <!-- Header Banner & Action Button -->
+      <div style="display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:1rem; margin-bottom:1.5rem;">
+        <div>
+          <h3 style="font-size:1.25rem; font-weight:700; margin-bottom:.25rem; display:flex; align-items:center; gap:.5rem;">
+            <span>🎓</span> Academic Transcripts & Multi-Credential Bundles
+          </h3>
+          <p style="color:var(--text-muted); font-size:.88rem; margin:0;">
+            Bundle multiple credentials for a student into a unified, cryptographically signed Academic Transcript with an itemized course matrix.
+          </p>
+        </div>
+        <button type="button" class="btn btn-primary" onclick="toggleBundleModal(true)">
+          ➕ Create Transcript Bundle
+        </button>
+      </div>
+
+      <!-- Quick Metrics Grid -->
+      <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap:1rem; margin-bottom:1.5rem;">
+        <div class="stat-card" style="padding:1rem;">
+          <div class="stat-value" style="font-size:1.5rem;">{{ bundles|length if bundles else 0 }}</div>
+          <div class="stat-label">Total Transcripts</div>
+        </div>
+        <div class="stat-card" style="padding:1rem;">
+          <div class="stat-value" style="font-size:1.5rem; color:var(--emerald-light);">
+            {{ (bundles | selectattr('status', 'equalto', 'active') | list | length) if bundles else 0 }}
+          </div>
+          <div class="stat-label">Active Transcripts</div>
+        </div>
+        <div class="stat-card" style="padding:1rem;">
+          <div class="stat-value" style="font-size:1.5rem; color:var(--amber-light);">
+            {{ (bundles | selectattr('status', 'equalto', 'revoked') | list | length) if bundles else 0 }}
+          </div>
+          <div class="stat-label">Revoked Transcripts</div>
+        </div>
+        <div class="stat-card" style="padding:1rem;">
+          <div class="stat-value" style="font-size:1.5rem; color:var(--indigo-light);">Ed25519 Root</div>
+          <div class="stat-label">Cryptographic Seal</div>
+        </div>
+      </div>
+
+      <!-- Bundle Creation Modal / Slide-out Form -->
+      <div id="bundle-modal" style="display:none; background:rgba(15,23,42,0.85); border:1px solid rgba(99,102,241,0.4); border-radius:var(--radius-lg); padding:1.75rem; margin-bottom:2rem; box-shadow:0 8px 32px rgba(0,0,0,0.4);">
+        <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:1.25rem;">
+          <h4 style="font-size:1.1rem; color:var(--text); margin:0;">➕ Assemble New Academic Transcript Bundle</h4>
+          <button type="button" class="btn btn-ghost btn-sm" onclick="toggleBundleModal(false)">✖ Close</button>
+        </div>
+        <form method="POST" action="{{ url_for('admin_create_bundle') }}">
+          <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap:1.25rem; margin-bottom:1.25rem;">
+            
+            <div class="form-group">
+              <label class="form-label" for="bundle_recipient">Student / Recipient Name *</label>
+              <input type="text" id="bundle_recipient" name="recipient_name" class="form-control" list="recipients-datalist" placeholder="e.g. Aisha Sharma" required oninput="handleRecipientInput(this.value)">
+              <datalist id="recipients-datalist">
+                {% if unique_recipients %}
+                  {% for r in unique_recipients %}
+                    <option value="{{ r.student_name }}">{{ r.cert_count }} certificate(s)</option>
+                  {% endfor %}
+                {% endif %}
+              </datalist>
+              <small style="color:var(--text-muted); font-size:.78rem;">Select or type recipient name to auto-discover their certificates.</small>
+            </div>
+
+            <div class="form-group">
+              <label class="form-label" for="bundle_email">Student Email / ID (Optional)</label>
+              <input type="email" id="bundle_email" name="recipient_email" class="form-control" placeholder="e.g. student@university.edu">
+            </div>
+
+            <div class="form-group">
+              <label class="form-label" for="bundle_title">Transcript Title *</label>
+              <input type="text" id="bundle_title" name="title" class="form-control" placeholder="e.g. Bachelor of Technology in Computer Science Transcript" required value="Official Academic Transcript">
+            </div>
+
+            <div class="form-group">
+              <label class="form-label" for="bundle_institution">Issuing Institution *</label>
+              <input type="text" id="bundle_institution" name="institution_name" class="form-control" placeholder="e.g. National Institute of Technology" required value="CertValid Academic Authority">
+            </div>
+
+            <div class="form-group">
+              <label class="form-label" for="bundle_issue_date">Conferral / Issue Date *</label>
+              <input type="date" id="bundle_issue_date" name="issue_date" class="form-control" required value="{{ today_str if today_str else '' }}">
+            </div>
+
+          </div>
+
+          <!-- Dynamic Certificate Checklist -->
+          <div class="form-group" style="margin-bottom:1.5rem;">
+            <label class="form-label">Include Credentials in Transcript *</label>
+            <div id="bundle-certs-container" style="background:rgba(0,0,0,0.25); border:1px solid var(--border); border-radius:var(--radius); padding:1rem; max-height:220px; overflow-y:auto;">
+              <p style="color:var(--text-muted); font-size:.85rem; margin:0;" id="bundle-certs-placeholder">
+                👉 Type or select a recipient name above to view their issued certificates.
+              </p>
+              <div id="bundle-certs-list" style="display:none; display:flex; flex-direction:column; gap:.5rem;"></div>
+            </div>
+          </div>
+
+          <div style="display:flex; justify-content:flex-end; gap:.75rem;">
+            <button type="button" class="btn btn-ghost" onclick="toggleBundleModal(false)">Cancel</button>
+            <button type="submit" class="btn btn-primary">🛡️ Seal & Issue Transcript Bundle</button>
+          </div>
+        </form>
+      </div>
+
+      <!-- Existing Transcripts Registry Table -->
+      <div class="card" style="padding:1.5rem;">
+        <h4 style="font-size:1.05rem; margin-bottom:1rem; display:flex; align-items:center; gap:.5rem;">
+          <span>📜</span> Issued Academic Transcripts
+        </h4>
+
+        <div style="overflow-x:auto;">
+          <table class="table" style="width:100%; border-collapse:collapse; font-size:.88rem;">
+            <thead>
+              <tr style="border-bottom:1px solid var(--border); text-align:left; color:var(--text-muted);">
+                <th style="padding:.75rem;">Transcript ID</th>
+                <th style="padding:.75rem;">Title</th>
+                <th style="padding:.75rem;">Recipient</th>
+                <th style="padding:.75rem; text-align:center;">Credentials</th>
+                <th style="padding:.75rem;">Issue Date</th>
+                <th style="padding:.75rem; text-align:center;">Status</th>
+                <th style="padding:.75rem; text-align:right;">Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% if bundles and bundles|length > 0 %}
+                {% for b in bundles %}
+                <tr style="border-bottom:1px solid rgba(255,255,255,0.05);">
+                  <td style="padding:.75rem;">
+                    <a href="{{ url_for('verify_transcript', bundle_id=b.bundle_id) }}" target="_blank" style="font-family:monospace; font-weight:700; color:var(--accent-gold);">
+                      {{ b.bundle_id }}
+                    </a>
+                  </td>
+                  <td style="padding:.75rem;">
+                    <strong>{{ b.title }}</strong><br>
+                    <small style="color:var(--text-muted);">{{ b.institution_name }}</small>
+                  </td>
+                  <td style="padding:.75rem;">
+                    <strong>{{ b.recipient_name }}</strong>
+                    {% if b.recipient_email %}
+                      <br><small style="color:var(--text-dim);">{{ b.recipient_email }}</small>
+                    {% endif %}
+                  </td>
+                  <td style="padding:.75rem; text-align:center;">
+                    <span class="badge badge-authentic" style="font-size:.78rem;">{{ b.cert_count }} Awards</span>
+                  </td>
+                  <td style="padding:.75rem; color:var(--text-muted);">{{ b.issue_date }}</td>
+                  <td style="padding:.75rem; text-align:center;">
+                    {% if b.status == 'active' %}
+                      <span class="badge badge-authentic" style="font-size:.75rem;">Active</span>
+                    {% else %}
+                      <span class="badge badge-revoked" style="font-size:.75rem;">Revoked</span>
+                    {% endif %}
+                  </td>
+                  <td style="padding:.75rem; text-align:right;">
+                    <div style="display:inline-flex; gap:.4rem;">
+                      <a href="{{ url_for('verify_transcript', bundle_id=b.bundle_id) }}" target="_blank" class="btn btn-ghost btn-sm" style="font-size:.75rem; padding:.25rem .5rem;" title="View Transcript">
+                        👁️ View
+                      </a>
+                      <a href="{{ url_for('download_transcript_pdf', bundle_id=b.bundle_id) }}" class="btn btn-ghost btn-sm" style="font-size:.75rem; padding:.25rem .5rem;" title="Download PDF">
+                        📄 PDF
+                      </a>
+                      <button type="button" class="btn btn-ghost btn-sm" style="font-size:.75rem; padding:.25rem .5rem;" onclick="navigator.clipboard.writeText('{{ url_for('verify_transcript', bundle_id=b.bundle_id, _external=True) }}'); alert('Transcript link copied to clipboard!');" title="Copy Link">
+                        🔗
+                      </button>
+                      {% if admin_role == 'superadmin' and b.status == 'active' %}
+                        <form method="POST" action="{{ url_for('admin_revoke_bundle', bundle_id=b.bundle_id) }}" style="display:inline;" onsubmit="return confirm('Are you sure you want to revoke transcript bundle {{ b.bundle_id }}?');">
+                          <button type="submit" class="btn btn-danger btn-sm" style="font-size:.75rem; padding:.25rem .5rem;" title="Revoke Transcript">
+                            ❌
+                          </button>
+                        </form>
+                      {% endif %}
+                    </div>
+                  </td>
+                </tr>
+                {% endfor %}
+              {% else %}
+                <tr>
+                  <td colspan="7" style="text-align:center; padding:2rem; color:var(--text-muted);">
+                    No academic transcripts created yet. Click "+ Create Transcript Bundle" above to assemble one!
+                  </td>
+                </tr>
+              {% endif %}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+    </div>
+
   </div><!-- /container -->
 </div><!-- /page-wrapper -->
 {% endif %}
@@ -1442,6 +1632,66 @@
     if (page < 1 || page > total) return;
     logsCurrentPage = page;
     filterLogs();
+  }
+
+  // ─── Academic Transcripts & Bundles UI Handlers ─────────────────────────────
+  function toggleBundleModal(show) {
+    const m = document.getElementById('bundle-modal');
+    if (m) m.style.display = show ? 'block' : 'none';
+    if (show) {
+      const today = new Date().toISOString().split('T')[0];
+      const dateInput = document.getElementById('bundle_issue_date');
+      if (dateInput && !dateInput.value) dateInput.value = today;
+    }
+  }
+
+  let recipientDebounce = null;
+  function handleRecipientInput(name) {
+    clearTimeout(recipientDebounce);
+    recipientDebounce = setTimeout(() => {
+      loadRecipientCertificates(name);
+    }, 300);
+  }
+
+  function loadRecipientCertificates(name) {
+    const listEl = document.getElementById('bundle-certs-list');
+    const placeholder = document.getElementById('bundle-certs-placeholder');
+    if (!name || name.trim().length < 2) {
+      if (placeholder) {
+        placeholder.style.display = 'block';
+        placeholder.textContent = '👉 Type or select a recipient name above to view their issued certificates.';
+      }
+      if (listEl) listEl.style.display = 'none';
+      return;
+    }
+    fetch(`/admin/api/recipient-certs?name=${encodeURIComponent(name.trim())}`)
+      .then(r => r.json())
+      .then(data => {
+        if (data.success && data.certs && data.certs.length > 0) {
+          if (placeholder) placeholder.style.display = 'none';
+          if (listEl) {
+            listEl.style.display = 'flex';
+            listEl.innerHTML = data.certs.map(c => `
+              <label style="display:flex; align-items:center; gap:.6rem; padding:.45rem .6rem; background:rgba(255,255,255,0.04); border-radius:6px; cursor:pointer;">
+                <input type="checkbox" name="cert_ids" value="${c.cert_id}" checked style="width:16px; height:16px; accent-color:var(--indigo);">
+                <div style="flex:1;">
+                  <strong>${c.course_name}</strong> &nbsp;
+                  <code style="color:var(--accent-gold); font-size:.8rem;">${c.cert_id}</code>
+                  <span style="font-size:.75rem; color:var(--text-muted); margin-left:.5rem;">(Issued: ${c.issue_date})</span>
+                </div>
+                <span class="badge ${c.status === 'active' ? 'badge-authentic' : 'badge-revoked'}" style="font-size:.72rem;">${c.status}</span>
+              </label>
+            `).join('');
+          }
+        } else {
+          if (placeholder) {
+            placeholder.style.display = 'block';
+            placeholder.textContent = `No certificates found for "${name}". Please check the student name or issue a certificate first.`;
+          }
+          if (listEl) listEl.style.display = 'none';
+        }
+      })
+      .catch(err => console.error('Error fetching recipient certs:', err));
   }
 
   document.addEventListener('DOMContentLoaded', function() {
