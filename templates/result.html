@@ -6,6 +6,27 @@
   <title>Verification Result — CertValid</title>
   <meta name="description" content="Certificate verification result showing authenticity status and details.">
   <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+
+  {% if cert and cert.cert_id %}
+  <!-- Open Graph / Facebook / LinkedIn Meta Tags -->
+  <meta property="og:type" content="website">
+  <meta property="og:title" content="Verified Credential: {{ cert.student_name }} — {{ cert.course_name }}">
+  <meta property="og:description" content="Authentic credential issued by {{ cert.issuer_name }}. Cryptographically verified on CertValid.">
+  <meta property="og:image" content="{{ url_for('cert_social_card_png', cert_id=cert.cert_id, _external=True) }}">
+  <meta property="og:url" content="{{ url_for('verify_by_id', cert_id=cert.cert_id, _external=True) }}">
+  <meta property="og:site_name" content="CertValid Enterprise Registry">
+
+  <!-- Twitter / X Card Meta Tags -->
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="Verified Credential: {{ cert.student_name }} — {{ cert.course_name }}">
+  <meta name="twitter:description" content="Authentic credential issued by {{ cert.issuer_name }}. Verified on CertValid.">
+  <meta name="twitter:image" content="{{ url_for('cert_social_card_png', cert_id=cert.cert_id, _external=True) }}">
+
+  <!-- Schema.org / W3C EducationalOccupationalCredential Structured Data -->
+  <script type="application/ld+json">
+    {{ get_credential_json_ld(cert, url_for('verify_by_id', cert_id=cert.cert_id, _external=True), url_for('cert_badge_svg', cert_id=cert.cert_id, _external=True)) | tojson | safe }}
+  </script>
+  {% endif %}
 </head>
 <body>
 
@@ -99,6 +120,12 @@
             <button type="button" class="btn btn-primary btn-sm" onclick="openBadgeModal()">
               🏷️ Embed Badge
             </button>
+            {% set linkedin_url = get_linkedin_add_url(cert, url_for('verify_by_id', cert_id=cert.cert_id, _external=True)) %}
+            {% if linkedin_url %}
+              <a href="{{ linkedin_url }}" target="_blank" rel="noopener" class="btn btn-sm" style="background:#0a66c2; color:#fff; border-color:#0a66c2;" title="Add verified credential to your LinkedIn profile">
+                💼 Add to LinkedIn
+              </a>
+            {% endif %}
           </div>
         {% endif %}
       </div>
@@ -351,6 +378,22 @@
       <button type="button" id="copySnippetBtn" onclick="copyBadgeSnippet()" class="btn btn-primary btn-sm" style="position:absolute; right:8px; top:8px;">
         📋 Copy
       </button>
+    </div>
+
+    <!-- Social Share & 1200x630 Card Link -->
+    <div style="background:rgba(255,255,255,0.03); border:1px solid var(--border-color); border-radius:8px; padding:.75rem 1rem; margin-bottom:1.25rem; display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:.5rem;">
+      <span style="font-size:.82rem; color:var(--text-muted);">Share to Feed:</span>
+      <div style="display:flex; gap:.5rem;">
+        <a href="https://www.linkedin.com/sharing/share-offsite/?url={{ url_for('verify_by_id', cert_id=cert.cert_id, _external=True) | urlencode }}" target="_blank" rel="noopener" class="btn btn-sm" style="background:#0a66c2; color:#fff; font-size:.78rem; padding:4px 8px;">
+          🔗 LinkedIn
+        </a>
+        <a href="https://twitter.com/intent/tweet?text={{ ('Verified credential on CertValid: ' ~ cert.student_name ~ ' - ' ~ cert.course_name) | urlencode }}&url={{ url_for('verify_by_id', cert_id=cert.cert_id, _external=True) | urlencode }}" target="_blank" rel="noopener" class="btn btn-sm btn-ghost" style="font-size:.78rem; padding:4px 8px;">
+          🐦 X / Twitter
+        </a>
+        <a href="{{ url_for('cert_social_card_png', cert_id=cert.cert_id) }}" target="_blank" class="btn btn-sm btn-ghost" style="font-size:.78rem; padding:4px 8px;" title="View 1200x630 Social Card Image">
+          🖼️ Preview Card
+        </a>
+      </div>
     </div>
 
     <div style="text-align:right;">

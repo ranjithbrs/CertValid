@@ -30,6 +30,7 @@ import notifications
 import merkle
 import pdf_cert
 import badge
+import social
 
 # ─── App Setup ───────────────────────────────────────────────────────────────
 
@@ -697,6 +698,31 @@ def cert_embed_widget(cert_id):
         status = 'AUTHENTIC'
 
     return render_template('embed.html', cert=cert, cert_id=cert_id, status=status)
+
+
+@app.route('/social-card/<cert_id>.png')
+@app.route('/social-card/<cert_id>')
+def cert_social_card_png(cert_id):
+    """Serve 1200x630 Open Graph / Twitter Card social preview PNG image."""
+    cert_id = cert_id.strip().upper()
+    cert = db.get_certificate_by_id(cert_id)
+    if not cert:
+        cert = {'cert_id': cert_id, 'student_name': 'Unknown Recipient', 'course_name': 'Certificate Not Found', 'status': 'not_found'}
+
+    png_bytes = social.generate_social_card_png(cert)
+    response = make_response(png_bytes)
+    response.headers['Content-Type'] = 'image/png'
+    response.headers['Cache-Control'] = 'public, max-age=300'
+    return response
+
+
+@app.context_processor
+def inject_social_helpers():
+    """Inject LinkedIn and Schema.org helper functions into all templates."""
+    return {
+        'get_linkedin_add_url': social.get_linkedin_add_url,
+        'get_credential_json_ld': social.get_credential_json_ld,
+    }
 
 
 # ─── Admin Routes ─────────────────────────────────────────────────────────────
