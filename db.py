@@ -563,29 +563,51 @@ def normalize_name_for_matching(text: str) -> str:
     return ' '.join(text.lower().split())
 
 
-def extract_anchor_recipient(doc_text: str):
+def extract_anchor_recipient(doc_text: str) -> str | None:
     """
     Extract candidate recipient name appearing directly in primary certificate anchor phrases
-    (e.g., 'certify that [NAME]', 'presented to [NAME]', 'awarded to [NAME]').
+    across varied layouts, line breaks, colon delimiters, honorific prefixes, and decorative stylings.
+    Supports full Unicode letters (e.g. diacritics/accents) and multiple name tokens.
     """
     if not doc_text:
         return None
-    p1 = (
-        r'(?:certif(?:y|ies)\s+that|presented\s+to|proudly\s+presented\s+to|'
-        r'awarded\s+to|conferred\s+upon|granted\s+to|issued\s+to)\s+'
-        r'([A-Za-z \t\.\'\-]{2,40}?)(?=\s+(?:has|for|on|in|who|by|with|\d|\n|$|[,\.;]))'
-    )
-    m = re.search(p1, doc_text, re.IGNORECASE)
-    if m and m.group(1).strip():
-        return m.group(1).strip()
 
-    p2 = (
-        r'(?:certif(?:y|ies)\s+that|presented\s+to|proudly\s+presented\s+to|'
-        r'awarded\s+to|conferred\s+upon|granted\s+to|issued\s+to)\s*\n+\s*([A-Za-z \t\.\'\-]{2,40})'
+    clean_text = doc_text.strip()
+    anchor_prefix = (
+        r'(?:this\s+(?:certificate\s+)?is\s+(?:to\s+|proudly\s+)?)?'
+        r'(?:certif(?:y|ies|icate\s+is\s+awarded\s+to|icate\s+is\s+presented\s+to)\s+that|'
+        r'presented\s+to|proudly\s+presented\s+to|awarded\s+to|conferred\s+upon|granted\s+to|issued\s+to)[:\s\-]*'
+        r'(?:\s*(?:dr|mr|mrs|ms|prof|mx)\.?\s+)?'
     )
-    m2 = re.search(p2, doc_text, re.IGNORECASE)
+
+    stop_delims = (
+        r'(?=\s+(?:has|for|on|in|who|by|with|completed|successfully|achieved|graduated|'
+        r'fulfilled|satisfied|demonstrated|passed|participated|\d|\n|$|[,;]|\.(?:\s+|$)))'
+    )
+
+    # Strategy 1: Anchor followed by recipient on the same line with a stop delimiter lookahead
+    p1 = anchor_prefix + r'\s*([^\W\d_ \t\.\'\-]{1,30}(?:[ \t\.\'\-]+[^\W\d_ \t\.\'\-]{1,30}){0,5}?)\s*' + stop_delims
+    m1 = re.search(p1, clean_text, re.IGNORECASE)
+    if m1 and m1.group(1).strip():
+        cand = m1.group(1).strip().strip(' *~_=-|[]\t')
+        if len(cand) >= 2 and any(c.isalpha() for c in cand):
+            return cand
+
+    # Strategy 2: Anchor followed by candidate name on the same line without a stop delimiter
+    p2 = anchor_prefix + r'[ \t]+([^\W\d_ \t\.\'\-]{1,30}(?:[ \t\.\'\-]+[^\W\d_ \t\.\'\-]{1,30}){0,5}?)(?:\r?\n|$|[,;]|\.(?:\s+|$))'
+    m2 = re.search(p2, clean_text, re.IGNORECASE)
     if m2 and m2.group(1).strip():
-        return m2.group(1).strip()
+        cand = m2.group(1).strip().strip(' *~_=-|[]\t')
+        if len(cand) >= 2 and any(c.isalpha() for c in cand):
+            return cand
+
+    # Strategy 3: Multi-line layout (anchor on one line, recipient on subsequent line)
+    p3 = anchor_prefix + r'(?:\r?\n)+[ \t\-_=\*~|]*([^\W\d_ \t\.\'\-]{1,30}(?:[ \t\.\'\-]+[^\W\d_ \t\.\'\-]{1,30}){0,5}?)[ \t\-_=\*~|]*(?:\r?\n|$)'
+    m3 = re.search(p3, clean_text, re.IGNORECASE)
+    if m3 and m3.group(1).strip():
+        cand = m3.group(1).strip().strip(' *~_=-|[]\t')
+        if len(cand) >= 2 and any(c.isalpha() for c in cand):
+            return cand
 
     return None
 
@@ -710,8 +732,11 @@ def add_certificate(student_name, course_name, issue_date, issuer_name, file_has
         except (sqlite3.IntegrityError, Exception) as e:
             conn.rollback()
             err_msg = str(e).lower()
-            if 'unique' in err_msg or 'primary' in err_msg or isinstance(e, sqlite3.IntegrityError):
+            # Only translate unique constraint collisions on cert_id to DuplicateCertificateError
+            is_unique_conflict = ('unique' in err_msg or 'primary key' in err_msg) and ('cert_id' in err_msg or 'id' in err_msg or 'unique constraint' in err_msg)
+            if is_unique_conflict:
                 raise DuplicateCertificateError(target_id) from e
+            # Re-raise non-duplicate integrity errors (e.g., NOT NULL failure) or operational lock errors
             raise
         finally:
             conn.close()
@@ -731,9 +756,12 @@ def add_certificate(student_name, course_name, issue_date, issuer_name, file_has
                     ''', (candidate_id, student_name, course_name, issue_date, issuer_name, file_hash, phash, signature, now, expires_at))
                     conn.commit()
                     return candidate_id
-                except sqlite3.IntegrityError:
+                except sqlite3.IntegrityError as ie:
                     conn.rollback()
-                    continue
+                    err_msg = str(ie).lower()
+                    if ('unique' in err_msg or 'primary key' in err_msg) and ('cert_id' in err_msg or 'id' in err_msg or 'unique constraint' in err_msg):
+                        continue
+                    raise
             raise RuntimeError("Failed to generate a unique certificate ID after multiple attempts.")
         finally:
             conn.close()
@@ -962,8 +990,11 @@ def create_bundle(title: str, recipient_name: str, recipient_email: str, institu
         except (sqlite3.IntegrityError, Exception) as e:
             conn.rollback()
             err_msg = str(e).lower()
-            if 'unique' in err_msg or 'primary' in err_msg or isinstance(e, sqlite3.IntegrityError):
+            # Only translate unique constraint collisions on bundle_id to DuplicateBundleError
+            is_unique_conflict = ('unique' in err_msg or 'primary key' in err_msg) and ('bundle_id' in err_msg or 'id' in err_msg or 'unique constraint' in err_msg)
+            if is_unique_conflict:
                 raise DuplicateBundleError(target_id) from e
+            # Re-raise non-duplicate integrity errors or operational lock errors
             raise
         finally:
             conn.close()
@@ -983,9 +1014,12 @@ def create_bundle(title: str, recipient_name: str, recipient_email: str, institu
                     ''', (candidate_id, title, recipient_name, recipient_email, institution_name, issue_date, cert_ids_json, bundle_hash, sig, now))
                     conn.commit()
                     return candidate_id
-                except sqlite3.IntegrityError:
+                except sqlite3.IntegrityError as ie:
                     conn.rollback()
-                    continue
+                    err_msg = str(ie).lower()
+                    if ('unique' in err_msg or 'primary key' in err_msg) and ('bundle_id' in err_msg or 'id' in err_msg or 'unique constraint' in err_msg):
+                        continue
+                    raise
             raise RuntimeError("Unable to generate a unique transcript bundle ID after multiple attempts.")
         finally:
             conn.close()

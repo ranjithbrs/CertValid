@@ -435,6 +435,76 @@ class SecurityAuditTestSuite(unittest.TestCase):
         self.assertGreaterEqual(sim, 0.90)
 
 
+    def test_ocr_anchor_extraction_varied_layouts_and_delimiters(self):
+        """Positive: OCR anchor extraction works across varied layouts, line breaks, colons, and decorative styles."""
+        # 1. Same-line without trailing delimiter
+        cand1 = db.extract_anchor_recipient("Presented to: Jane Elizabeth Doe")
+        self.assertEqual(cand1, "Jane Elizabeth Doe")
+
+        # 2. Multi-line with decorative symbols and line breaks
+        text2 = (
+            "CERTIFICATE OF COMPLETION\n"
+            "THIS CERTIFIES THAT\n\n"
+            "*** Jane Doe ***\n"
+            "For successfully completing Data Engineering"
+        )
+        cand2 = db.extract_anchor_recipient(text2)
+        self.assertEqual(cand2, "Jane Doe")
+
+        # 3. Multi-line with colons and dashes
+        text3 = (
+            "Certificate Awarded To:\n"
+            "--- Jane Doe ---\n"
+            "Date: 2026-11-01"
+        )
+        cand3 = db.extract_anchor_recipient(text3)
+        self.assertEqual(cand3, "Jane Doe")
+
+        # 4. Same-line with non-standard transition verb
+        text4 = "This is to certify that Jane Doe completed Advanced Machine Learning"
+        cand4 = db.extract_anchor_recipient(text4)
+        self.assertEqual(cand4, "Jane Doe")
+
+        # Full verification matching
+        is_match, sim, _ = db.verify_ocr_recipient_name(text2, "Jane Doe")
+        self.assertTrue(is_match)
+        self.assertGreaterEqual(sim, 0.90)
+
+    def test_concurrency_error_distinction_not_null_vs_duplicate(self):
+        """Integrity: Non-duplicate integrity violations (e.g. NOT NULL) are NOT misreported as DuplicateCertificateError."""
+        # student_name is NOT NULL in database schema
+        with self.assertRaises(Exception) as ctx:
+            db.add_certificate(
+                student_name=None,  # Triggers NOT NULL constraint
+                course_name="Database Integrity",
+                issue_date="2026-11-01",
+                issuer_name="Integrity Authority",
+                file_hash=hashlib.sha256(b"seed").hexdigest(),
+                cert_id=f"CERT-DISTINCT-{uuid.uuid4().hex[:6].upper()}"
+            )
+        # Must NOT be DuplicateCertificateError
+        self.assertNotIsInstance(ctx.exception, db.DuplicateCertificateError)
+        self.assertIn("NOT NULL constraint failed", str(ctx.exception))
+
+    def test_concurrency_bundle_error_distinction(self):
+        """Integrity: Duplicate bundle IDs raise DuplicateBundleError, while non-duplicate errors are distinct."""
+        cid = db.add_certificate(
+            student_name="Bundle Recipient",
+            course_name="Core Systems",
+            issue_date="2026-11-01",
+            issuer_name="CertValid",
+            file_hash=hashlib.sha256(b"bundle_seed").hexdigest()
+        )
+        bid = f"BND-DISTINCT-{uuid.uuid4().hex[:6].upper()}"
+        # First creation succeeds
+        db.create_bundle("Transcript A", "Bundle Recipient", "b@test.com", "Test Inst", "2026-11-01", [cid], bundle_id=bid)
+
+        # Second creation with identical bundle_id must raise DuplicateBundleError
+        with self.assertRaises(db.DuplicateBundleError):
+            db.create_bundle("Transcript B", "Bundle Recipient", "b@test.com", "Test Inst", "2026-11-01", [cid], bundle_id=bid)
+
+
 if __name__ == '__main__':
     unittest.main()
+
 
