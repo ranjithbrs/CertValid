@@ -25,6 +25,7 @@ from PIL import Image, ImageDraw, ImageFont
 from werkzeug.utils import secure_filename
 import qrcode
 import imagehash
+import pypdf
 
 import db
 import storage

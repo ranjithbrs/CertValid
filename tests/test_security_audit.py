@@ -266,9 +266,10 @@ class SecurityAuditTestSuite(unittest.TestCase):
         self.assertIsNotNone(cert)
 
         # Create a fake PDF that contains 'CERT-2024-001' but with an altered student name 'Impostor Bob'
-        pdf_buffer = io.BytesIO()
+        pdf_bytes = None
         try:
             from reportlab.pdfgen import canvas
+            pdf_buffer = io.BytesIO()
             c = canvas.Canvas(pdf_buffer)
             c.drawString(100, 700, "Certificate of Completion")
             c.drawString(100, 650, "Awarded to Impostor Bob")
@@ -276,17 +277,33 @@ class SecurityAuditTestSuite(unittest.TestCase):
             c.drawString(100, 550, "Certificate ID: CERT-2024-001")
             c.save()
             pdf_bytes = pdf_buffer.getvalue()
-
-            res = self.client.post('/verify', data={
-                'mode': 'file',
-                'certificate': (io.BytesIO(pdf_bytes), 'altered_cert.pdf')
-            }, follow_redirects=True)
-            self.assertEqual(res.status_code, 200)
-            self.assertIn(b'Tamper Detected', res.data)
-            self.assertIn(b'TAMPERED DOCUMENT', res.data)
         except ImportError:
-            # If ReportLab is not installed, verify through API/text extraction logic
-            pass
+            # If ReportLab is not installed, synthesize standard PDF stream with identical text
+            stream = (
+                "BT /F1 18 Tf 100 700 Td (Certificate of Completion) Tj ET\n"
+                "BT /F1 18 Tf 100 650 Td (Awarded to Impostor Bob) Tj ET\n"
+                "BT /F1 18 Tf 100 600 Td (For course in Computer Science) Tj ET\n"
+                "BT /F1 18 Tf 100 550 Td (Certificate ID: CERT-2024-001) Tj ET"
+            )
+            raw_pdf = (
+                f"%PDF-1.4\n"
+                f"1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n"
+                f"2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n"
+                f"3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >> endobj\n"
+                f"4 0 obj << /Length {len(stream)} >> stream\n{stream}\nendstream endobj\n"
+                f"5 0 obj << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> endobj\n"
+                f"xref\n0 6\n0000000000 65535 f \n"
+                f"trailer << /Size 6 /Root 1 0 R >>\nstartxref\n0\n%%EOF"
+            )
+            pdf_bytes = raw_pdf.encode('latin1')
+
+        res = self.client.post('/verify', data={
+            'mode': 'file',
+            'certificate': (io.BytesIO(pdf_bytes), 'altered_cert.pdf')
+        }, follow_redirects=True)
+        self.assertEqual(res.status_code, 200)
+        self.assertIn(b'Tamper Detected', res.data)
+        self.assertIn(b'TAMPERED DOCUMENT', res.data)
 
     # ─── 6. Verification Statuses: Revoked, Expired, Not Found ────────────────
 
