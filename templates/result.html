@@ -80,6 +80,17 @@
           </span>
         </div>
       </div>
+    {% elif status_upper == 'TAMPERED' %}
+      <div class="result-hero invalid fade-in-up" style="border-color:#ef4444; background:rgba(239,68,68,0.12);">
+        <div class="result-icon">⚠️</div>
+        <div class="result-title" style="color: #f87171;">Tamper Detected / Document Altered</div>
+        <p class="result-reason">{{ reason }}</p>
+        <div style="margin-top:1rem;">
+          <span class="badge badge-invalid" style="background:rgba(239,68,68,0.3); border-color:#ef4444; color:#fca5a5;">
+            <span class="pulse-dot pulse-red"></span> TAMPERED DOCUMENT
+          </span>
+        </div>
+      </div>
     {% elif status_upper == 'EXPIRED' %}
       <div class="result-hero revoked fade-in-up" style="border-color:#f59e0b; background:rgba(245,158,11,0.08);">
         <div class="result-icon">⏳</div>

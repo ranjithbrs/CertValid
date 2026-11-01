@@ -15,7 +15,7 @@
 
 - 🌐 **Public Verification Portal:** [ranjithbrs.pythonanywhere.com](https://ranjithbrs.pythonanywhere.com)
 - 📜 **Sample Academic Transcript:** [ranjithbrs.pythonanywhere.com/transcript/TR-2024-001](https://ranjithbrs.pythonanywhere.com/transcript/TR-2024-001)
-- 🔑 **Admin Portal:** [ranjithbrs.pythonanywhere.com/admin](https://ranjithbrs.pythonanywhere.com/admin) *(Username: `admin` | Password: `admin123`)*
+- 🔑 **Admin Management Portal:** [ranjithbrs.pythonanywhere.com/admin](https://ranjithbrs.pythonanywhere.com/admin)
 - 🐙 **GitHub Repository:** [github.com/ranjithbrs/CertValid](https://github.com/ranjithbrs/CertValid)
 
 ---
@@ -129,16 +129,17 @@ You can test the verification engine right now using these seeded records on the
 
 ---
 
-## 🔑 Admin Portal Demo Credentials
+## 🔒 Admin Portal & Security Access
 
-Want to test how administrators issue and manage certificates?  
-Log in at [ranjithbrs.pythonanywhere.com/admin](https://ranjithbrs.pythonanywhere.com/admin):
+Administrators manage certificates, academic transcripts, visual themes, and audit logs at [ranjithbrs.pythonanywhere.com/admin](https://ranjithbrs.pythonanywhere.com/admin).
 
-| Credential | Value |
-| :--- | :--- |
-| **Username** | `admin` |
-| **Password** | `admin123` |
-| **Role** | Super Administrator (Full Management Access) |
+For enterprise security:
+- Admin credentials are configured securely via environment variables: `ADMIN_USERNAME` and `ADMIN_PASSWORD`.
+- If no password is set on first run, a cryptographically secure random password is automatically generated.
+- Password rotation is supported via CLI: `python db.py set-admin-password <username> <new_password>`.
+- Multi-factor authentication (TOTP 2FA) is supported with Google/Microsoft Authenticator.
+
+
 
 ---
 
@@ -146,6 +147,8 @@ Log in at [ranjithbrs.pythonanywhere.com/admin](https://ranjithbrs.pythonanywher
 
 <details>
 <summary><b>🛠️ Click to expand Technical Architecture, REST API & Local Setup Guide</b></summary>
+
+> 📖 **Full Verification & Security Architecture Specification:** See [docs/VERIFICATION_WORKFLOW.md](docs/VERIFICATION_WORKFLOW.md) for sequence diagrams, threat models, and security matrices.
 
 ### 🏗️ How the Multi-Layer Verification Engine Works
 
