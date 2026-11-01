@@ -66,8 +66,8 @@ def generate_all_evidence():
             {"id": 8, "task": "Document certificate verification workflow", "status": "COMPLETED", "verified": True}
         ],
         "test_results": {
-            "total_tests": 18,
-            "passed": 18,
+            "total_tests": 27,
+            "passed": 27,
             "failed": 0,
             "coverage_areas": [
                 "Authentication Hardening & Session Fixation Protection",
@@ -78,7 +78,10 @@ def generate_all_evidence():
                 "Branded Level-H QR Code Verification",
                 "Duplicate Certificate ID Collision Prevention",
                 "File Extension & MIME Magic Byte Inspection",
-                "Input Sanitization & Date Boundary Checks"
+                "Input Sanitization & Date Boundary Checks",
+                "Concurrency-Safe Atomic ID Insertion & Conflict Retries",
+                "OCR Anchor Extraction with Varied Delimiter & Multiline Layouts",
+                "Integrity Constraint Error Distinction (NOT NULL vs UNIQUE)"
             ]
         }
     }

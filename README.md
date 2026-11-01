@@ -3,6 +3,7 @@
 > **Say goodbye to fake degrees and altered certificates.**  
 > CertValid is a modern, tamper-proof credential verification platform built for universities, employers, and students. Verify any certificate or academic transcript in under 2 seconds.
 
+[![CI Test Suite](https://github.com/ranjithbrs/CertValid/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/ranjithbrs/CertValid/actions/workflows/ci.yml)
 [![Live Demo](https://img.shields.io/badge/Live%20Demo-PythonAnywhere-brightgreen?style=for-the-badge&logo=python&logoColor=white)](https://ranjithbrs.pythonanywhere.com)
 [![Framework: Flask](https://img.shields.io/badge/Framework-Flask-000000?style=for-the-badge&logo=flask&logoColor=white)](https://flask.palletsprojects.com/)
 [![Security: Tamper--Proof](https://img.shields.io/badge/Security-Ed25519%20Cryptographic%20Signatures-indigo?style=for-the-badge&logo=securityscorecard&logoColor=white)](https://ranjithbrs.pythonanywhere.com)
