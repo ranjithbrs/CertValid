@@ -10,6 +10,7 @@ import re
 import uuid
 import hashlib
 import unittest
+import threading
 from datetime import datetime
 from PIL import Image
 
@@ -313,5 +314,127 @@ class SecurityAuditTestSuite(unittest.TestCase):
         self.assertTrue(res.data.startswith(b'\x89PNG\r\n\x1a\n'))
 
 
+    # ─── 8. Concurrency Safety & OCR Name Hardening ──────────────────────────
+
+    def test_concurrent_certificate_issuance_safety(self):
+        """Positive: 10 concurrent threads issuing certificates simultaneously all succeed without deadlock."""
+        issued_ids = []
+        errors = []
+        lock = threading.Lock()
+
+        def worker(idx):
+            try:
+                unique_seed = f"ConcurrentStudent_{idx}_{uuid.uuid4()}"
+                fhash = hashlib.sha256(unique_seed.encode()).hexdigest()
+                cid = db.add_certificate(
+                    student_name=f"Concurrent Student {idx}",
+                    course_name="Distributed Computing",
+                    issue_date="2026-11-01",
+                    issuer_name="CertValid Concurrency Cluster",
+                    file_hash=fhash
+                )
+                with lock:
+                    issued_ids.append(cid)
+            except Exception as e:
+                with lock:
+                    errors.append(e)
+
+        threads = [threading.Thread(target=worker, args=(i,)) for i in range(10)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        self.assertEqual(len(errors), 0, f"Encountered unexpected errors during concurrent issuance: {errors}")
+        self.assertEqual(len(issued_ids), 10)
+        self.assertEqual(len(set(issued_ids)), 10, "Duplicate IDs were generated during concurrent issuance!")
+
+    def test_concurrent_duplicate_id_rejection(self):
+        """Negative: Concurrent threads attempting to insert the exact same custom cert_id are rejected."""
+        target_id = f"CERT-RACE-{uuid.uuid4().hex[:6].upper()}"
+        successes = []
+        duplicates = []
+        unexpected = []
+        lock = threading.Lock()
+
+        def racer(idx):
+            try:
+                unique_seed = f"Racer_{idx}_{uuid.uuid4()}"
+                fhash = hashlib.sha256(unique_seed.encode()).hexdigest()
+                cid = db.add_certificate(
+                    student_name=f"Racer {idx}",
+                    course_name="Concurrency Race",
+                    issue_date="2026-11-01",
+                    issuer_name="Race Test",
+                    file_hash=fhash,
+                    cert_id=target_id
+                )
+                with lock:
+                    successes.append(cid)
+            except db.DuplicateCertificateError as dce:
+                with lock:
+                    duplicates.append(dce)
+            except Exception as e:
+                with lock:
+                    unexpected.append(e)
+
+        threads = [threading.Thread(target=racer, args=(i,)) for i in range(8)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        self.assertEqual(len(unexpected), 0, f"Unexpected errors in race condition: {unexpected}")
+        self.assertEqual(len(successes), 1, "Expected exactly 1 thread to successfully insert the custom ID.")
+        self.assertEqual(len(duplicates), 7, f"Expected 7 threads to catch DuplicateCertificateError, got {len(duplicates)}")
+
+    def test_ocr_name_matching_anchor_conflict(self):
+        """Negative: Impostor name on certificate primary line triggers recipient substitution tampering."""
+        doc_text = (
+            "CERTIFICATE OF COMPLETION\n"
+            "This is proudly presented to Impostor Bob\n"
+            "for successfully passing Machine Learning with Honors.\n"
+            "Certificate ID: CERT-2024-001\n"
+        )
+        is_match, sim, reason = db.verify_ocr_recipient_name(doc_text, "Aisha Sharma")
+        self.assertFalse(is_match)
+        self.assertIn("Recipient substitution detected", reason)
+
+    def test_ocr_name_matching_footer_spoofing_rejected(self):
+        """Negative: Placing registered recipient in footer while another is on main line is rejected."""
+        doc_text = (
+            "Certificate of Excellence\n"
+            "Awarded to Charlie Attacker for Senior Project.\n"
+            "ID: CERT-2024-001\n\n"
+            "--- Fine Print / Registry Record ---\n"
+            "Originally registered recipient: Aisha Sharma. All rights reserved."
+        )
+        is_match, sim, reason = db.verify_ocr_recipient_name(doc_text, "Aisha Sharma")
+        self.assertFalse(is_match)
+
+    def test_ocr_name_matching_noise_tolerance(self):
+        """Positive: Optical OCR noise (e.g., 'Aisha Sharrna' for 'Aisha Sharma') is tolerated with fuzzy similarity >= 80%."""
+        doc_text = (
+            "CERTIFICATE OF MERIT\n"
+            "This is to certify that Aisha Sharrna has completed Advanced Cryptography.\n"
+            "Issued on 2026-11-01."
+        )
+        is_match, sim, reason = db.verify_ocr_recipient_name(doc_text, "Aisha Sharma")
+        self.assertTrue(is_match)
+        self.assertGreaterEqual(sim, 0.80)
+
+    def test_ocr_name_matching_diacritics_and_honorifics(self):
+        """Positive: Unicode diacritics and honorific titles are normalized cleanly."""
+        doc_text = (
+            "Certificate of Achievement\n"
+            "Presented to Dr. Aïsha Sharma\n"
+            "for Distinguished Service."
+        )
+        is_match, sim, reason = db.verify_ocr_recipient_name(doc_text, "Aisha Sharma")
+        self.assertTrue(is_match)
+        self.assertGreaterEqual(sim, 0.90)
+
+
 if __name__ == '__main__':
     unittest.main()
+

@@ -14,6 +14,7 @@ import io
 import re
 import base64
 import json
+import unicodedata
 from datetime import datetime
 from PIL import Image
 import imagehash
@@ -45,6 +46,27 @@ if DATABASE_URL:
     _engine = create_engine(DATABASE_URL, pool_pre_ping=True)
 
 
+# ─── Custom Domain Exceptions ──────────────────────────────────────────────────
+
+class CertValidError(Exception):
+    """Base exception class for CertValid domain errors."""
+    pass
+
+
+class DuplicateCertificateError(CertValidError, ValueError):
+    """Raised when attempting to insert a certificate with an existing or conflicting ID."""
+    def __init__(self, cert_id: str, message: str = None):
+        self.cert_id = cert_id
+        super().__init__(message or f"Certificate ID '{cert_id}' already exists in registry.")
+
+
+class DuplicateBundleError(CertValidError, ValueError):
+    """Raised when attempting to insert a credential bundle with an existing or conflicting ID."""
+    def __init__(self, bundle_id: str, message: str = None):
+        self.bundle_id = bundle_id
+        super().__init__(message or f"Credential Bundle ID '{bundle_id}' already exists.")
+
+
 # ─── Connection ───────────────────────────────────────────────────────────────
 
 def get_db():
@@ -53,9 +75,10 @@ def get_db():
         conn = _engine.raw_connection()
         return conn
 
-    conn = sqlite3.connect(DB_PATH)
+    conn = sqlite3.connect(DB_PATH, timeout=15.0)
     conn.row_factory = sqlite3.Row
     conn.execute('PRAGMA journal_mode=WAL')
+    conn.execute('PRAGMA busy_timeout=15000')
     conn.execute('PRAGMA foreign_keys=ON')
     return conn
 
@@ -498,6 +521,128 @@ def extract_cert_id_from_text(text: str) -> str:
     return match.group(0).upper() if match else None
 
 
+def _levenshtein_distance(s1: str, s2: str) -> int:
+    """Compute standard Levenshtein edit distance between two strings."""
+    if s1 == s2:
+        return 0
+    if not s1:
+        return len(s2)
+    if not s2:
+        return len(s1)
+    dp = list(range(len(s2) + 1))
+    for i, c1 in enumerate(s1, 1):
+        new_dp = [i] * (len(s2) + 1)
+        for j, c2 in enumerate(s2, 1):
+            cost = 0 if c1 == c2 else 1
+            new_dp[j] = min(dp[j] + 1, new_dp[j - 1] + 1, dp[j - 1] + cost)
+        dp = new_dp
+    return dp[-1]
+
+
+def _similarity_ratio(s1: str, s2: str) -> float:
+    """Normalized similarity ratio between 0.0 and 1.0 based on Levenshtein distance."""
+    if not s1 and not s2:
+        return 1.0
+    if not s1 or not s2:
+        return 0.0
+    max_len = max(len(s1), len(s2))
+    return max(0.0, 1.0 - (_levenshtein_distance(s1, s2) / max_len))
+
+
+def normalize_name_for_matching(text: str) -> str:
+    """
+    Normalize text for robust recipient matching:
+    Decompose unicode diacritics/accents, strip titles/honorifics, collapse whitespace.
+    """
+    if not text:
+        return ""
+    text = unicodedata.normalize('NFKD', str(text))
+    text = ''.join(c for c in text if not unicodedata.combining(c))
+    text = re.sub(r'\b(mr|mrs|ms|dr|prof|mx)\b\.?', ' ', text, flags=re.IGNORECASE)
+    text = re.sub(r'[^a-zA-Z0-9\s]', ' ', text)
+    return ' '.join(text.lower().split())
+
+
+def extract_anchor_recipient(doc_text: str):
+    """
+    Extract candidate recipient name appearing directly in primary certificate anchor phrases
+    (e.g., 'certify that [NAME]', 'presented to [NAME]', 'awarded to [NAME]').
+    """
+    if not doc_text:
+        return None
+    p1 = (
+        r'(?:certif(?:y|ies)\s+that|presented\s+to|proudly\s+presented\s+to|'
+        r'awarded\s+to|conferred\s+upon|granted\s+to|issued\s+to)\s+'
+        r'([A-Za-z \t\.\'\-]{2,40}?)(?=\s+(?:has|for|on|in|who|by|with|\d|\n|$|[,\.;]))'
+    )
+    m = re.search(p1, doc_text, re.IGNORECASE)
+    if m and m.group(1).strip():
+        return m.group(1).strip()
+
+    p2 = (
+        r'(?:certif(?:y|ies)\s+that|presented\s+to|proudly\s+presented\s+to|'
+        r'awarded\s+to|conferred\s+upon|granted\s+to|issued\s+to)\s*\n+\s*([A-Za-z \t\.\'\-]{2,40})'
+    )
+    m2 = re.search(p2, doc_text, re.IGNORECASE)
+    if m2 and m2.group(1).strip():
+        return m2.group(1).strip()
+
+    return None
+
+
+def verify_ocr_recipient_name(doc_text: str, registered_name: str, threshold: float = 0.80):
+    """
+    Verify recipient name from OCR document text against official registered name:
+    1. Detect primary anchor recipient line and detect recipient substitution/conflict.
+    2. Check exact word-bounded contiguous match.
+    3. Perform windowed contiguous fuzzy matching to tolerate optical noise while defeating
+       scattered-token attacks and footer spoofing.
+    Returns (is_match: bool, similarity: float, reason: str).
+    """
+    norm_reg = normalize_name_for_matching(registered_name)
+    if not norm_reg:
+        return False, 0.0, "Missing registered recipient name for verification."
+
+    # Step 1: Primary line anchor conflict check
+    anchor_cand = extract_anchor_recipient(doc_text)
+    if anchor_cand:
+        norm_anchor = normalize_name_for_matching(anchor_cand)
+        anchor_sim = _similarity_ratio(norm_anchor, norm_reg)
+        if anchor_sim >= threshold:
+            return True, round(anchor_sim, 3), f"Recipient name verified on primary certificate line ({anchor_cand}, similarity {round(anchor_sim*100, 1)}%)."
+        elif anchor_sim < 0.60:
+            return False, round(anchor_sim, 3), f"Recipient substitution detected: certificate primary line is awarded to '{anchor_cand}', but registered recipient is '{registered_name}'."
+
+    norm_doc = normalize_name_for_matching(doc_text)
+    # Step 2: Exact contiguous word-boundary match
+    if re.search(r'\b' + re.escape(norm_reg) + r'\b', norm_doc):
+        return True, 1.0, f"Exact contiguous recipient name match found for '{registered_name}'."
+
+    # Step 3: Sliding window fuzzy matching over contiguous tokens
+    tokens = norm_doc.split()
+    reg_tokens = norm_reg.split()
+    k = len(reg_tokens)
+    if not tokens or k == 0:
+        return False, 0.0, "No matching tokens found in certificate text."
+
+    best_sim = 0.0
+    best_cand = ""
+    for w in (k, k - 1, k + 1):
+        if w <= 0:
+            continue
+        for i in range(len(tokens) - w + 1):
+            window_str = ' '.join(tokens[i : i + w])
+            sim = _similarity_ratio(window_str, norm_reg)
+            if sim > best_sim:
+                best_sim = sim
+                best_cand = window_str
+
+    if best_sim >= threshold:
+        return True, round(best_sim, 3), f"Recipient verified via fuzzy match ({best_cand}, similarity {round(best_sim*100, 1)}%)."
+
+    return False, round(best_sim, 3), f"Recipient name '{registered_name}' not found in certificate text (best match similarity: {round(best_sim*100, 1)}%)."
+
+
 # ─── Certificate CRUD ────────────────────────────────────────────────────────
 
 def check_cert_expiry(cert: dict) -> dict:
@@ -540,26 +685,58 @@ def check_cert_expiry(cert: dict) -> dict:
 
 
 def add_certificate(student_name, course_name, issue_date, issuer_name, file_hash, phash=None, expires_at=None, cert_id=None):
-    """Insert a new certificate record with Ed25519 digital signature. Returns the generated cert_id."""
-    if cert_id:
-        cert_id = cert_id.strip().upper()
-        if get_certificate_by_id(cert_id):
-            raise ValueError(f"Certificate ID '{cert_id}' already exists in registry.")
-    else:
-        cert_id = generate_cert_id()
-    payload = build_cert_payload(cert_id, student_name, course_name, issue_date, file_hash)
-    signature = sign_payload(payload)
-
+    """
+    Insert a new certificate record with Ed25519 digital signature.
+    Concurrency-safe with atomic transaction (BEGIN IMMEDIATE) and collision retry loops.
+    Returns the generated cert_id.
+    """
     now = datetime.now().isoformat(sep=' ', timespec='seconds')
-    conn = get_db()
-    conn.execute('''
-        INSERT INTO certificates
-        (cert_id, student_name, course_name, issue_date, issuer_name, file_hash, phash, signature, status, created_at, expires_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?)
-    ''', (cert_id, student_name, course_name, issue_date, issuer_name, file_hash, phash, signature, now, expires_at))
-    conn.commit()
-    conn.close()
-    return cert_id
+    is_custom_id = bool(cert_id)
+
+    if is_custom_id:
+        target_id = cert_id.strip().upper()
+        payload = build_cert_payload(target_id, student_name, course_name, issue_date, file_hash)
+        signature = sign_payload(payload)
+        conn = get_db()
+        try:
+            conn.execute('BEGIN IMMEDIATE')
+            conn.execute('''
+                INSERT INTO certificates
+                (cert_id, student_name, course_name, issue_date, issuer_name, file_hash, phash, signature, status, created_at, expires_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?)
+            ''', (target_id, student_name, course_name, issue_date, issuer_name, file_hash, phash, signature, now, expires_at))
+            conn.commit()
+            return target_id
+        except (sqlite3.IntegrityError, Exception) as e:
+            conn.rollback()
+            err_msg = str(e).lower()
+            if 'unique' in err_msg or 'primary' in err_msg or isinstance(e, sqlite3.IntegrityError):
+                raise DuplicateCertificateError(target_id) from e
+            raise
+        finally:
+            conn.close()
+    else:
+        conn = get_db()
+        try:
+            for _ in range(5):
+                candidate_id = generate_cert_id()
+                payload = build_cert_payload(candidate_id, student_name, course_name, issue_date, file_hash)
+                signature = sign_payload(payload)
+                try:
+                    conn.execute('BEGIN IMMEDIATE')
+                    conn.execute('''
+                        INSERT INTO certificates
+                        (cert_id, student_name, course_name, issue_date, issuer_name, file_hash, phash, signature, status, created_at, expires_at)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?)
+                    ''', (candidate_id, student_name, course_name, issue_date, issuer_name, file_hash, phash, signature, now, expires_at))
+                    conn.commit()
+                    return candidate_id
+                except sqlite3.IntegrityError:
+                    conn.rollback()
+                    continue
+            raise RuntimeError("Failed to generate a unique certificate ID after multiple attempts.")
+        finally:
+            conn.close()
 
 
 # ─── Burkhard-Keller (BK-Tree) Metric Tree Data Structure ─────────────────────
@@ -754,33 +931,64 @@ def generate_bundle_id() -> str:
 
 
 def create_bundle(title: str, recipient_name: str, recipient_email: str, institution_name: str, issue_date: str, cert_ids: list, bundle_id: str = None) -> str:
-    """Create a new academic transcript bundle with Ed25519 signature."""
-    if not bundle_id:
-        bundle_id = generate_bundle_id()
-    else:
-        bundle_id = bundle_id.strip().upper()
-
+    """
+    Create a new academic transcript bundle with Ed25519 signature.
+    Concurrency-safe with atomic transaction (BEGIN IMMEDIATE) and collision retry loops.
+    """
     title = (title or "Academic Transcript").strip()
     recipient_name = recipient_name.strip()
     recipient_email = (recipient_email or '').strip()
     institution_name = (institution_name or "CertValid Academic Board").strip()
     issue_date = issue_date.strip() if issue_date else datetime.now().strftime('%Y-%m-%d')
     sorted_cert_ids = sorted(list(set(str(cid).strip().upper() for cid in cert_ids if cid)))
-
-    bundle_hash = compute_bundle_hash(bundle_id, title, recipient_name, institution_name, issue_date, sorted_cert_ids)
-    sig = sign_payload(bundle_hash)
-    now = datetime.now().isoformat(sep=' ', timespec='seconds')
     cert_ids_json = json.dumps(sorted_cert_ids)
+    now = datetime.now().isoformat(sep=' ', timespec='seconds')
 
-    conn = get_db()
-    conn.execute('''
-        INSERT INTO credential_bundles
-        (bundle_id, title, recipient_name, recipient_email, institution_name, issue_date, cert_ids, bundle_hash, signature, status, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?)
-    ''', (bundle_id, title, recipient_name, recipient_email, institution_name, issue_date, cert_ids_json, bundle_hash, sig, now))
-    conn.commit()
-    conn.close()
-    return bundle_id
+    is_custom_id = bool(bundle_id)
+    if is_custom_id:
+        target_id = bundle_id.strip().upper()
+        bundle_hash = compute_bundle_hash(target_id, title, recipient_name, institution_name, issue_date, sorted_cert_ids)
+        sig = sign_payload(bundle_hash)
+        conn = get_db()
+        try:
+            conn.execute('BEGIN IMMEDIATE')
+            conn.execute('''
+                INSERT INTO credential_bundles
+                (bundle_id, title, recipient_name, recipient_email, institution_name, issue_date, cert_ids, bundle_hash, signature, status, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?)
+            ''', (target_id, title, recipient_name, recipient_email, institution_name, issue_date, cert_ids_json, bundle_hash, sig, now))
+            conn.commit()
+            return target_id
+        except (sqlite3.IntegrityError, Exception) as e:
+            conn.rollback()
+            err_msg = str(e).lower()
+            if 'unique' in err_msg or 'primary' in err_msg or isinstance(e, sqlite3.IntegrityError):
+                raise DuplicateBundleError(target_id) from e
+            raise
+        finally:
+            conn.close()
+    else:
+        conn = get_db()
+        try:
+            for _ in range(5):
+                candidate_id = generate_bundle_id()
+                bundle_hash = compute_bundle_hash(candidate_id, title, recipient_name, institution_name, issue_date, sorted_cert_ids)
+                sig = sign_payload(bundle_hash)
+                try:
+                    conn.execute('BEGIN IMMEDIATE')
+                    conn.execute('''
+                        INSERT INTO credential_bundles
+                        (bundle_id, title, recipient_name, recipient_email, institution_name, issue_date, cert_ids, bundle_hash, signature, status, created_at)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?)
+                    ''', (candidate_id, title, recipient_name, recipient_email, institution_name, issue_date, cert_ids_json, bundle_hash, sig, now))
+                    conn.commit()
+                    return candidate_id
+                except sqlite3.IntegrityError:
+                    conn.rollback()
+                    continue
+            raise RuntimeError("Unable to generate a unique transcript bundle ID after multiple attempts.")
+        finally:
+            conn.close()
 
 
 def get_bundle(bundle_id: str) -> dict:

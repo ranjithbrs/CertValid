@@ -70,15 +70,21 @@ flowchart TD
 * **Fast Lookup:** Queries an in-memory **Burkhard-Keller Tree (BK-Tree)** data structure in $O(\log N)$ time with a maximum Hamming distance threshold of $10$ bits ($\ge 84.4\%$ visual similarity).
 * **Guarantees:** Confirms visual integrity even under recompression or resolution scaling.
 
-### 3. Tier 3: OCR Text Extraction & Tamper Detection
+### 3. Tier 3: Robust OCR Text Extraction & Anti-Spoofing Verification
 * **Mechanism:** If Tiers 1 and 2 miss, the document text is extracted using `pypdf` (for PDF documents) or `pytesseract` (for scanned images).
 * **ID Extraction:** Regex pattern matching extracts valid certificate identifiers (`CERT-\d{4}-[A-Z0-9]{3,8}`).
-* **Tamper Detection Cross-Check:**
-  - If a certificate ID is found, CertValid retrieves the official registry record.
-  - **Critical Security Control:** The engine cross-examines the extracted document text against the official registered recipient name (`cert['student_name']`).
-  - **Verdict:** If the ID matches but the recipient name is missing or substituted (e.g. Photoshop forgery), the document is immediately flagged as **`TAMPERED`** and logged for security review.
+* **Multi-Layered Recipient Cross-Check (`db.verify_ocr_recipient_name`):**
+  - **Anchor Conflict & Recipient Substitution Defense:** Extracts the candidate name on the certificate's primary display line using certificate anchor phrases (`certify that [NAME]`, `presented to [NAME]`, `awarded to [NAME]`). If an impostor name is printed on the primary line, it is immediately rejected even if the genuine recipient's name is sneakily placed in tiny footer text or metadata (**defeats footer-spoofing attacks**).
+  - **Contiguous Sliding Window Fuzzy Matching:** Analyzes adjacent token windows using Levenshtein distance ($\ge 80\%$ similarity threshold). This tolerates real-world optical scan noise (e.g. `m` vs `rn`, `l` vs `1`, unicode diacritics/accents) while rejecting scattered-token attacks where words are dispersed throughout the document.
+  - **Word Boundary Protection:** Enforces `\b...\b` token boundaries to prevent substring false positives (e.g., recipient `Dan` matching `Dangerous`).
+  - **Verdict:** If the ID matches but recipient verification fails, the document is immediately flagged as **`TAMPERED`** and logged for audit review.
 
-### 4. Tier 4: Ed25519 Cryptographic Digital Signatures
+### 4. Concurrency Safety & TOCTOU Race Condition Elimination
+* **Atomic Transactions:** Certificate and transcript bundle insertions employ atomic `BEGIN IMMEDIATE` SQLite transactions and catch `sqlite3.IntegrityError` collisions at the database layer rather than relying on vulnerable pre-check reads (`SELECT ... WHERE id = ?`).
+* **Typed Domain Exceptions:** Conflicting custom IDs cleanly raise `DuplicateCertificateError` or `DuplicateBundleError`, translating directly to HTTP `409 Conflict` REST API responses and user-friendly flash notices.
+* **Deadlock & Contention Prevention:** Configures `PRAGMA busy_timeout = 15000` (15-second busy handler) and SQLite WAL mode, with an automated 5-attempt retry loop for auto-generated IDs under high concurrent issuance loads.
+
+### 5. Tier 5: Ed25519 Cryptographic Digital Signatures
 * **Algorithm:** Pure Ed25519 (Edwards-curve Digital Signature Algorithm, RFC 8032).
 * **Payload Structure:** Canonical string `cert_id|student_name|course_name|issue_date|file_hash`.
 * **Verification:** Anyone possessing the institutional public key (`instance/keys/ed25519_public.pem` or `pub_key_b64`) can verify the mathematical authenticity of the credential offline without network or database access.
