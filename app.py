@@ -625,22 +625,21 @@ def verify():
         if ocr_cert_id:
             ocr_cert = db.get_certificate_by_id(ocr_cert_id)
             if ocr_cert:
-                doc_text = extracted_text.lower()
-                reg_name = ocr_cert['student_name'].strip().lower()
-                name_words = [w for w in reg_name.split() if len(w) > 2]
-                name_found = (reg_name in doc_text) or (len(name_words) > 0 and all(w in doc_text for w in name_words))
+                is_name_match, name_sim, match_reason = db.verify_ocr_recipient_name(
+                    extracted_text, ocr_cert['student_name']
+                )
 
-                if not name_found:
+                if not is_name_match:
                     tamper_detected = True
                     tamper_reason = (
                         f"TAMPER DETECTED: Document text references certificate ID '{ocr_cert_id}', "
-                        f"but official recipient name ('{ocr_cert['student_name']}') was NOT found "
-                        f"in the document text. The certificate appears altered or forged."
+                        f"but recipient verification failed: {match_reason}. "
+                        f"The certificate appears altered or forged."
                     )
                 else:
                     cert = ocr_cert
                     match_type = 'ocr'
-                    similarity = 100.0
+                    similarity = round(name_sim * 100.0, 1)
 
     if tamper_detected:
         db.log_verification(ocr_cert_id, filename, computed_hash, 'TAMPERED', tamper_reason, ip)
@@ -1567,14 +1566,21 @@ def admin_create_bundle():
         flash('Please select at least one certificate to include in the transcript bundle.', 'error')
         return redirect(url_for('admin_dashboard') + '?tab=transcripts')
 
-    bundle_id = db.create_bundle(
-        title=title,
-        recipient_name=recipient_name,
-        recipient_email=recipient_email,
-        institution_name=institution_name,
-        issue_date=issue_date,
-        cert_ids=cert_ids
-    )
+    try:
+        bundle_id = db.create_bundle(
+            title=title,
+            recipient_name=recipient_name,
+            recipient_email=recipient_email,
+            institution_name=institution_name,
+            issue_date=issue_date,
+            cert_ids=cert_ids
+        )
+    except (db.DuplicateBundleError, ValueError) as ve:
+        flash(f'Bundle creation rejected: {ve}', 'error')
+        return redirect(url_for('admin_dashboard') + '?tab=transcripts')
+    except Exception as e:
+        flash(f'Failed to create transcript bundle: {e}', 'error')
+        return redirect(url_for('admin_dashboard') + '?tab=transcripts')
 
     notifications.trigger_event('TRANSCRIPT_ISSUED', {
         'bundle_id': bundle_id,
@@ -1749,21 +1755,20 @@ def api_verify_file():
         if ocr_cert_id:
             ocr_cert = db.get_certificate_by_id(ocr_cert_id)
             if ocr_cert:
-                doc_text = extracted_text.lower()
-                reg_name = ocr_cert['student_name'].strip().lower()
-                name_words = [w for w in reg_name.split() if len(w) > 2]
-                name_found = (reg_name in doc_text) or (len(name_words) > 0 and all(w in doc_text for w in name_words))
+                is_name_match, name_sim, match_reason = db.verify_ocr_recipient_name(
+                    extracted_text, ocr_cert['student_name']
+                )
 
-                if not name_found:
+                if not is_name_match:
                     tamper_detected = True
                     tamper_reason = (
                         f"TAMPER DETECTED: Document references certificate ID '{ocr_cert_id}', "
-                        f"but official recipient name ('{ocr_cert['student_name']}') does not match."
+                        f"but recipient verification failed: {match_reason}."
                     )
                 else:
                     cert = ocr_cert
                     match_type = 'ocr'
-                    similarity = 100.0
+                    similarity = round(name_sim * 100.0, 1)
 
     if tamper_detected:
         db.log_verification(ocr_cert_id, filename, computed_hash, 'TAMPERED', tamper_reason, ip)
@@ -1834,7 +1839,7 @@ def api_issue_certificate():
     file_hash   = hashlib.sha256(unique_seed.encode()).hexdigest()
     try:
         cert_id = db.add_certificate(student_name, course_name, issue_date, issuer_name, file_hash, expires_at=expires_at, cert_id=custom_cert_id)
-    except ValueError as ve:
+    except (db.DuplicateCertificateError, ValueError) as ve:
         return jsonify({'error': 'Conflict', 'message': str(ve)}), 409
     except Exception as e:
         return jsonify({'error': 'Internal Server Error', 'message': str(e)}), 500
