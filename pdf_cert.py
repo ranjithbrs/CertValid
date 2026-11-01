@@ -8,10 +8,14 @@ import io
 import os
 import qrcode
 from PIL import Image
-from reportlab.pdfgen import canvas
-from reportlab.lib.pagesizes import letter, landscape
-from reportlab.lib import colors
-from reportlab.lib.utils import ImageReader
+try:
+    from reportlab.pdfgen import canvas
+    from reportlab.lib.pagesizes import letter, landscape
+    from reportlab.lib import colors
+    from reportlab.lib.utils import ImageReader
+    HAS_REPORTLAB = True
+except ImportError:
+    HAS_REPORTLAB = False
 
 BASE_URL = os.environ.get('BASE_URL', 'https://ranjithbrs.pythonanywhere.com').rstrip('/')
 
@@ -28,6 +32,9 @@ def generate_vector_pdf_certificate(cert: dict, theme: str = 'gold') -> bytes:
     Generate a vector PDF certificate document using ReportLab.
     Returns the binary content (bytes) of the generated PDF file.
     """
+    if not HAS_REPORTLAB:
+        raise RuntimeError("ReportLab library is not installed.")
+
     buffer = io.BytesIO()
     # 11 x 8.5 inches landscape (792 x 612 pt)
     w, h = landscape(letter)

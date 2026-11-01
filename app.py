@@ -10,6 +10,7 @@ import uuid
 import csv
 import zipfile
 import hashlib
+import re
 from datetime import datetime, timedelta
 from functools import wraps
 
@@ -21,6 +22,7 @@ from flask import (
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
 from PIL import Image, ImageDraw, ImageFont
+from werkzeug.utils import secure_filename
 import qrcode
 import imagehash
 
@@ -65,6 +67,15 @@ os.makedirs(CERT_FOLDER,   exist_ok=True)
 ALLOWED_EXTENSIONS = {'jpg', 'jpeg', 'png', 'pdf'}
 MAX_FILE_SIZE_MB   = 10
 
+# Security: Enforce request body size limit at WSGI/Flask layer to prevent memory exhaustion DoS
+app.config['MAX_CONTENT_LENGTH'] = MAX_FILE_SIZE_MB * 1024 * 1024
+
+# Security: Session cookie hardening against XSS and CSRF
+app.config['SESSION_COOKIE_HTTPONLY'] = True
+app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
+if os.environ.get('SESSION_COOKIE_SECURE', 'false').lower() == 'true':
+    app.config['SESSION_COOKIE_SECURE'] = True
+
 # Base URL for QR codes — reads from env var so live site uses the real domain
 BASE_URL = os.environ.get('BASE_URL', 'https://ranjithbrs.pythonanywhere.com').rstrip('/')
 
@@ -86,8 +97,98 @@ def add_security_headers(response):
 
 # ─── Helpers & RBAC Decorators ───────────────────────────────────────────────
 
-def allowed_file(filename):
+def allowed_file(filename: str) -> bool:
+    """Check if the provided filename has an approved extension."""
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
+
+
+
+def validate_uploaded_file(file_bytes: bytes, filename: str) -> tuple[bool, str]:
+    """
+    Deep MIME magic bytes & structural validation for uploaded documents.
+    Protects against file extension spoofing (e.g. PHP/executables renamed to .png).
+    """
+    if not file_bytes:
+        return False, "Uploaded file is empty (0 bytes)."
+
+    if not allowed_file(filename):
+        return False, f"Unsupported file type. Allowed formats: {', '.join(sorted(ALLOWED_EXTENSIONS))}."
+
+    ext = filename.rsplit('.', 1)[1].lower() if '.' in filename else ''
+    if ext == 'pdf':
+        if not file_bytes.startswith(b'%PDF'):
+            return False, "Invalid PDF: Missing standard '%PDF' magic header."
+        try:
+            reader = pypdf.PdfReader(io.BytesIO(file_bytes))
+            if len(reader.pages) == 0:
+                return False, "Invalid PDF: Document contains zero readable pages."
+        except Exception as e:
+            return False, f"Corrupted or unreadable PDF: {str(e)[:80]}"
+    elif ext in ('png', 'jpg', 'jpeg'):
+        if ext == 'png' and not file_bytes.startswith(b'\x89PNG\r\n\x1a\n'):
+            return False, "Invalid PNG: Missing genuine PNG magic header."
+        elif ext in ('jpg', 'jpeg') and not file_bytes.startswith(b'\xff\xd8\xff'):
+            return False, "Invalid JPEG: Missing genuine JPEG magic header."
+        try:
+            with Image.open(io.BytesIO(file_bytes)) as img:
+                img.verify()
+        except Exception as e:
+            return False, f"Corrupted or invalid image: {str(e)[:80]}"
+
+    return True, ""
+
+
+def validate_certificate_inputs(student_name: str, course_name: str, issue_date: str, issuer_name: str, expires_at: str = None) -> tuple[bool, str]:
+    """
+    Sanitize and validate certificate form parameters:
+    Enforces minimum/maximum lengths, prohibits HTML/script characters, and verifies date formats.
+    """
+    if not all([student_name, course_name, issue_date, issuer_name]):
+        return False, "All required fields (Student Name, Course, Issue Date, Issuer) must be provided."
+
+    for field_name, val, max_len in [
+        ('Student Name', student_name, 120),
+        ('Course Name', course_name, 150),
+        ('Issuer Name', issuer_name, 150)
+    ]:
+        if len(val) < 2:
+            return False, f"{field_name} must be at least 2 characters long."
+        if len(val) > max_len:
+            return False, f"{field_name} exceeds maximum length of {max_len} characters."
+        if '<' in val or '>' in val:
+            return False, f"{field_name} contains prohibited HTML or script characters."
+
+    # Validate issue_date
+    try:
+        parsed_issue = datetime.strptime(issue_date, '%Y-%m-%d')
+        if not (1990 <= parsed_issue.year <= 2100):
+            return False, "Issue date year must be between 1990 and 2100."
+    except ValueError:
+        return False, "Issue date must be a valid date in YYYY-MM-DD format."
+
+    # Validate expires_at if provided
+    if expires_at:
+        try:
+            parsed_expiry = datetime.strptime(expires_at, '%Y-%m-%d')
+            if not (1990 <= parsed_expiry.year <= 2100):
+                return False, "Expiry date year must be between 1990 and 2100."
+            if parsed_expiry < parsed_issue:
+                return False, "Expiry date cannot be prior to the certificate issue date."
+        except ValueError:
+            return False, "Expiry date must be a valid date in YYYY-MM-DD format."
+
+    return True, ""
+
+
+@app.errorhandler(413)
+def request_entity_too_large(error):
+    if request.path.startswith('/api/'):
+        return jsonify({'error': 'Payload Too Large', 'message': f'File exceeds {MAX_FILE_SIZE_MB}MB limit'}), 413
+    flash(f'Uploaded file exceeds the maximum allowed limit of {MAX_FILE_SIZE_MB} MB.', 'error')
+    return redirect(url_for('index')), 413
+
+
+
 
 
 def login_required(f):
@@ -418,6 +519,11 @@ def verify():
             flash('Please enter a Certificate ID.', 'error')
             return redirect(url_for('index'))
 
+        if len(cert_id) > 64 or not re.match(r'^[A-Z0-9_-]{3,64}$', cert_id):
+            flash('Invalid Certificate ID format.', 'error')
+            return redirect(url_for('index'))
+
+
         # Auto-detect Academic Transcript Bundle IDs
         if cert_id.startswith('TR-') or db.get_bundle(cert_id):
             return redirect(url_for('verify_transcript', bundle_id=cert_id))
@@ -477,8 +583,10 @@ def verify():
         return redirect(url_for('index'))
 
     file = request.files['certificate']
+    orig_filename = file.filename or ''
+    filename = secure_filename(orig_filename) or 'certificate_upload'
 
-    if not allowed_file(file.filename):
+    if not allowed_file(orig_filename):
         flash('Unsupported file type. Please upload JPG, PNG, or PDF.', 'error')
         return redirect(url_for('index'))
 
@@ -487,7 +595,10 @@ def verify():
         flash(f'File too large. Max size is {MAX_FILE_SIZE_MB} MB.', 'error')
         return redirect(url_for('index'))
 
-    filename       = file.filename
+    is_valid_file, err_msg = validate_uploaded_file(file_bytes, orig_filename)
+    if not is_valid_file:
+        flash(f'Upload validation failed: {err_msg}', 'error')
+        return redirect(url_for('index'))
     computed_hash  = db.compute_file_hash(file_bytes)
     computed_phash = db.compute_file_phash(file_bytes)
     ocr_cert_id    = None
@@ -506,15 +617,39 @@ def verify():
             similarity = sim
 
     # Tier 3: If Tiers 1 & 2 miss, perform OCR / PDF text extraction & Regex match
+    tamper_detected = False
+    tamper_reason = None
     if not cert:
         extracted_text = db.extract_text_from_file(file_bytes, filename)
         ocr_cert_id = db.extract_cert_id_from_text(extracted_text)
         if ocr_cert_id:
             ocr_cert = db.get_certificate_by_id(ocr_cert_id)
             if ocr_cert:
-                cert = ocr_cert
-                match_type = 'ocr'
-                similarity = 100.0
+                doc_text = extracted_text.lower()
+                reg_name = ocr_cert['student_name'].strip().lower()
+                name_words = [w for w in reg_name.split() if len(w) > 2]
+                name_found = (reg_name in doc_text) or (len(name_words) > 0 and all(w in doc_text for w in name_words))
+
+                if not name_found:
+                    tamper_detected = True
+                    tamper_reason = (
+                        f"TAMPER DETECTED: Document text references certificate ID '{ocr_cert_id}', "
+                        f"but official recipient name ('{ocr_cert['student_name']}') was NOT found "
+                        f"in the document text. The certificate appears altered or forged."
+                    )
+                else:
+                    cert = ocr_cert
+                    match_type = 'ocr'
+                    similarity = 100.0
+
+    if tamper_detected:
+        db.log_verification(ocr_cert_id, filename, computed_hash, 'TAMPERED', tamper_reason, ip)
+        return render_template('result.html', status='TAMPERED',
+                               reason=tamper_reason,
+                               cert=ocr_cert, mode='file', computed_hash=computed_hash,
+                               computed_phash=computed_phash, match_type='ocr', visual_similarity=0.0,
+                               ocr_cert_id=ocr_cert_id, signature_valid=False, public_key_b64=pub_key_b64,
+                               bundles=[], verified_at=now_str)
 
     sig_valid = False
     if cert and cert.get('signature'):
@@ -793,6 +928,7 @@ def admin():
         password = request.form.get('password', '')
         admin_user = db.verify_admin(username, password)
         if admin_user:
+            session.clear()
             session.permanent = True
             if admin_user.get('totp_enabled'):
                 session['pre_auth_user']   = admin_user['username']
@@ -814,6 +950,7 @@ def admin():
 
 
 @app.route('/admin/2fa', methods=['GET', 'POST'])
+@limiter.limit("5 per minute", methods=["POST"])
 def admin_2fa():
     """Verify 6-digit OTP code during 2-step login."""
     if session.get('admin_logged_in'):
@@ -1215,13 +1352,21 @@ def admin_issue():
     issuer_name  = request.form.get('issuer_name',  '').strip()
     expires_at   = request.form.get('expires_at',   '').strip() or None
 
-    if not all([student_name, course_name, issue_date, issuer_name]):
-        flash('All fields are required to issue a certificate.', 'error')
-        return redirect(url_for('admin_dashboard'))
+    is_valid, err_msg = validate_certificate_inputs(student_name, course_name, issue_date, issuer_name, expires_at)
+    if not is_valid:
+        flash(f'Validation Error: {err_msg}', 'error')
+        return redirect(url_for('admin_dashboard') + '?tab=issue')
 
     unique_seed = f'{student_name}|{course_name}|{issue_date}|{issuer_name}|{uuid.uuid4()}'
     file_hash   = hashlib.sha256(unique_seed.encode()).hexdigest()
-    cert_id     = db.add_certificate(student_name, course_name, issue_date, issuer_name, file_hash, expires_at=expires_at)
+    try:
+        cert_id = db.add_certificate(student_name, course_name, issue_date, issuer_name, file_hash, expires_at=expires_at)
+    except ValueError as ve:
+        flash(f'Issuance rejected: {ve}', 'error')
+        return redirect(url_for('admin_dashboard') + '?tab=issue')
+    except Exception as e:
+        flash(f'Database error: {e}', 'error')
+        return redirect(url_for('admin_dashboard') + '?tab=issue')
 
     cert_data = {
         'student_name': student_name,
@@ -1299,12 +1444,16 @@ def admin_issue_bulk():
                 i_name   = row_clean.get('issuer_name', '')
                 exp_date = row_clean.get('expires_at') or None
 
-                if not all([s_name, c_name, i_date, i_name]):
+                is_valid, _ = validate_certificate_inputs(s_name, c_name, i_date, i_name, exp_date)
+                if not is_valid:
                     continue
 
                 seed = f'{s_name}|{c_name}|{i_date}|{i_name}|{uuid.uuid4()}'
                 file_hash = hashlib.sha256(seed.encode()).hexdigest()
-                cert_id = db.add_certificate(s_name, c_name, i_date, i_name, file_hash, expires_at=exp_date)
+                try:
+                    cert_id = db.add_certificate(s_name, c_name, i_date, i_name, file_hash, expires_at=exp_date)
+                except Exception:
+                    continue
 
                 cert_data = {
                     'student_name': s_name,
@@ -1562,11 +1711,19 @@ def api_verify_file():
         return jsonify({'error': 'Bad Request', 'message': 'No certificate file uploaded'}), 400
 
     file = request.files['certificate']
-    if not allowed_file(file.filename):
+    orig_filename = file.filename or ''
+    filename = secure_filename(orig_filename) or 'api_certificate'
+
+    if not allowed_file(orig_filename):
         return jsonify({'error': 'Unsupported Media Type', 'message': 'Allowed extensions: JPG, PNG, PDF'}), 415
 
     file_bytes = file.read()
-    filename   = file.filename
+    if len(file_bytes) > MAX_FILE_SIZE_MB * 1024 * 1024:
+        return jsonify({'error': 'Payload Too Large', 'message': f'File exceeds {MAX_FILE_SIZE_MB}MB limit'}), 413
+
+    is_valid_file, err_msg = validate_uploaded_file(file_bytes, orig_filename)
+    if not is_valid_file:
+        return jsonify({'error': 'Bad Request', 'message': f'File validation failed: {err_msg}'}), 400
     ip         = request.remote_addr
 
     computed_hash  = db.compute_file_hash(file_bytes)
@@ -1584,15 +1741,40 @@ def api_verify_file():
             match_type = 'visual'
             similarity = sim
 
+    tamper_detected = False
+    tamper_reason = None
     if not cert:
         extracted_text = db.extract_text_from_file(file_bytes, filename)
         ocr_cert_id = db.extract_cert_id_from_text(extracted_text)
         if ocr_cert_id:
             ocr_cert = db.get_certificate_by_id(ocr_cert_id)
             if ocr_cert:
-                cert = ocr_cert
-                match_type = 'ocr'
-                similarity = 100.0
+                doc_text = extracted_text.lower()
+                reg_name = ocr_cert['student_name'].strip().lower()
+                name_words = [w for w in reg_name.split() if len(w) > 2]
+                name_found = (reg_name in doc_text) or (len(name_words) > 0 and all(w in doc_text for w in name_words))
+
+                if not name_found:
+                    tamper_detected = True
+                    tamper_reason = (
+                        f"TAMPER DETECTED: Document references certificate ID '{ocr_cert_id}', "
+                        f"but official recipient name ('{ocr_cert['student_name']}') does not match."
+                    )
+                else:
+                    cert = ocr_cert
+                    match_type = 'ocr'
+                    similarity = 100.0
+
+    if tamper_detected:
+        db.log_verification(ocr_cert_id, filename, computed_hash, 'TAMPERED', tamper_reason, ip)
+        return jsonify({
+            'status': 'TAMPERED',
+            'valid': False,
+            'message': tamper_reason,
+            'cert_id': ocr_cert_id,
+            'computed_hash': computed_hash,
+            'computed_phash': computed_phash
+        }), 200
 
     if not cert:
         db.log_verification(None, filename, computed_hash, 'INVALID', 'API File: No match', ip)
@@ -1636,15 +1818,26 @@ def api_issue_certificate():
     issue_date   = data.get('issue_date', '').strip()
     issuer_name  = data.get('issuer_name', '').strip()
 
-    if not all([student_name, course_name, issue_date, issuer_name]):
-        return jsonify({
-            'error': 'Bad Request',
-            'message': 'Missing required fields: student_name, course_name, issue_date, issuer_name'
-        }), 400
+    expires_at = data.get('expires_at')
+    custom_cert_id = data.get('cert_id')
+
+    is_valid, err_msg = validate_certificate_inputs(student_name, course_name, issue_date, issuer_name, expires_at)
+    if not is_valid:
+        return jsonify({'error': 'Bad Request', 'message': err_msg}), 400
+
+    if custom_cert_id:
+        custom_cert_id = custom_cert_id.strip().upper()
+        if db.get_certificate_by_id(custom_cert_id):
+            return jsonify({'error': 'Conflict', 'message': f"Certificate ID '{custom_cert_id}' already exists."}), 409
 
     unique_seed = f'{student_name}|{course_name}|{issue_date}|{issuer_name}|{uuid.uuid4()}'
     file_hash   = hashlib.sha256(unique_seed.encode()).hexdigest()
-    cert_id     = db.add_certificate(student_name, course_name, issue_date, issuer_name, file_hash)
+    try:
+        cert_id = db.add_certificate(student_name, course_name, issue_date, issuer_name, file_hash, expires_at=expires_at, cert_id=custom_cert_id)
+    except ValueError as ve:
+        return jsonify({'error': 'Conflict', 'message': str(ve)}), 409
+    except Exception as e:
+        return jsonify({'error': 'Internal Server Error', 'message': str(e)}), 500
 
     cert_data = {
         'student_name': student_name,
