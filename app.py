@@ -772,20 +772,28 @@ def verify_by_id(cert_id):
 @app.route('/download/<cert_id>')
 def download_cert(cert_id):
     """Download the generated certificate PNG image, generating it on-the-fly if needed."""
-    cert_id   = cert_id.strip().upper()
+    cert_id = cert_id.strip().upper()
+    if not re.match(r'^[A-Z0-9_\-]{3,64}$', cert_id):
+        flash('Invalid certificate ID format.', 'error')
+        return redirect(url_for('index'))
+
+    cert = db.get_certificate_by_id(cert_id)
+    if not cert:
+        flash('Certificate not found.', 'error')
+        return redirect(url_for('index'))
+
+    if cert.get('status') == 'revoked':
+        flash('Cannot download: Certificate has been officially revoked.', 'error')
+        return redirect(url_for('verify_by_id', cert_id=cert_id))
+
     cert_path = os.path.join(CERT_FOLDER, f'{cert_id}.png')
 
     if not os.path.exists(cert_path):
-        cert = db.get_certificate_by_id(cert_id)
-        if cert:
-            try:
-                generate_certificate_image(cert, cert_id)
-            except Exception as e:
-                app.logger.error(f'Dynamic image generation failed: {e}')
-                flash('Certificate image generation failed.', 'error')
-                return redirect(url_for('index'))
-        else:
-            flash('Certificate not found.', 'error')
+        try:
+            generate_certificate_image(cert, cert_id)
+        except Exception as e:
+            app.logger.error(f'Dynamic image generation failed: {e}')
+            flash('Certificate image generation failed.', 'error')
             return redirect(url_for('index'))
 
     return send_file(cert_path, as_attachment=True,
@@ -796,10 +804,18 @@ def download_cert(cert_id):
 def download_cert_pdf(cert_id):
     """Generate and stream official vector-quality PDF certificate."""
     cert_id = cert_id.strip().upper()
+    if not re.match(r'^[A-Z0-9_\-]{3,64}$', cert_id):
+        flash('Invalid certificate ID format.', 'error')
+        return redirect(url_for('index'))
+
     cert = db.get_certificate_by_id(cert_id)
     if not cert:
         flash('Certificate not found.', 'error')
         return redirect(url_for('index'))
+
+    if cert.get('status') == 'revoked':
+        flash('Cannot download: Certificate has been officially revoked.', 'error')
+        return redirect(url_for('verify_by_id', cert_id=cert_id))
 
     try:
         current_theme = db.get_setting('cert_theme', 'gold')
@@ -839,10 +855,18 @@ def verify_transcript(bundle_id):
 def download_transcript_pdf(bundle_id):
     """Generate and stream official portrait vector PDF academic transcript."""
     bundle_id = bundle_id.strip().upper()
+    if not re.match(r'^[A-Z0-9_\-]{3,64}$', bundle_id):
+        flash('Invalid transcript bundle ID format.', 'error')
+        return redirect(url_for('index'))
+
     bundle = db.get_bundle(bundle_id)
     if not bundle:
         flash('Transcript bundle not found.', 'error')
         return redirect(url_for('index'))
+
+    if bundle.get('status') == 'revoked' or bundle.get('overall_status') == 'REVOKED':
+        flash('Cannot download: Transcript bundle has been revoked.', 'error')
+        return redirect(url_for('verify_transcript', bundle_id=bundle_id))
 
     try:
         pdf_bytes = transcript_pdf.generate_transcript_pdf(bundle)
@@ -1066,6 +1090,11 @@ def admin_notification_settings():
     """Save Webhook and Email alert configurations."""
     webhook_enabled      = 'true' if request.form.get('webhook_enabled') else 'false'
     webhook_url          = request.form.get('webhook_url', '').strip()
+
+    if webhook_enabled == 'true' and webhook_url:
+        if not re.match(r'^https?:\/\/[^\s\/$.?#].[^\s]*$', webhook_url, re.IGNORECASE):
+            flash('Invalid Webhook URL: Must be a valid http:// or https:// URL.', 'error')
+            return redirect(url_for('admin_dashboard') + '?tab=notifications')
     email_alerts_enabled = 'true' if request.form.get('email_alerts_enabled') else 'false'
     smtp_host            = request.form.get('smtp_host', '').strip()
     smtp_port            = request.form.get('smtp_port', '587').strip()
@@ -1199,7 +1228,9 @@ def api_merkle_proof(cert_id):
 @login_required
 def admin_export_logs_csv():
     """Export verification logs to a CSV file."""
-    status_filter = request.args.get('status', 'ALL')
+    raw_status = request.args.get('status', 'ALL').strip().upper()
+    valid_statuses = {'ALL', 'AUTHENTIC', 'INVALID', 'TAMPERED', 'REVOKED', 'EXPIRED'}
+    status_filter = raw_status if raw_status in valid_statuses else 'ALL' 
     logs = db.get_all_logs(limit=2000, status_filter=status_filter)
 
     output = io.StringIO()
@@ -1230,7 +1261,9 @@ def admin_export_logs_csv():
 @login_required
 def admin_export_logs_pdf():
     """Generate and download executive PDF audit report using ReportLab."""
-    status_filter = request.args.get('status', 'ALL')
+    raw_status = request.args.get('status', 'ALL').strip().upper()
+    valid_statuses = {'ALL', 'AUTHENTIC', 'INVALID', 'TAMPERED', 'REVOKED', 'EXPIRED'}
+    status_filter = raw_status if raw_status in valid_statuses else 'ALL' 
     logs  = db.get_all_logs(limit=200, status_filter=status_filter)
     stats = db.get_stats()
 
@@ -1698,6 +1731,17 @@ def api_verify_id():
             'signature_valid': sig_valid
         }), 200
 
+    if cert.get('is_expired') or cert.get('effective_status') == 'expired':
+        db.log_verification(cert_id, None, None, 'EXPIRED', f'API: Certificate expired on {cert.get("expires_at")}', ip)
+        return jsonify({
+            'status': 'EXPIRED',
+            'valid': False,
+            'message': f'Certificate expired on {cert.get("expires_at")}',
+            'certificate': cert,
+            'signature_valid': sig_valid,
+            'public_key_b64': pub_key_b64
+        }), 200
+
     db.log_verification(cert_id, None, None, 'AUTHENTIC', 'API: Certificate verified', ip)
     return jsonify({
         'status': 'AUTHENTIC',
@@ -1797,7 +1841,13 @@ def api_verify_file():
         payload = db.build_cert_payload(cert['cert_id'], cert['student_name'], cert['course_name'], cert['issue_date'], cert['file_hash'])
         sig_valid = db.verify_payload_signature(payload, cert['signature'])
 
-    status_str = 'REVOKED' if cert['status'] == 'revoked' else 'AUTHENTIC'
+    if cert.get('status') == 'revoked':
+        status_str = 'REVOKED'
+    elif cert.get('is_expired') or cert.get('effective_status') == 'expired':
+        status_str = 'EXPIRED'
+    else:
+        status_str = 'AUTHENTIC'
+
     db.log_verification(cert['cert_id'], filename, computed_hash, status_str, f'API File verification ({match_type})', ip)
 
     return jsonify({

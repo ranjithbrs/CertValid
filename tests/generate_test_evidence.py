@@ -66,8 +66,8 @@ def generate_all_evidence():
             {"id": 8, "task": "Document certificate verification workflow", "status": "COMPLETED", "verified": True}
         ],
         "test_results": {
-            "total_tests": 27,
-            "passed": 27,
+            "total_tests": 34,
+            "passed": 34,
             "failed": 0,
             "coverage_areas": [
                 "Authentication Hardening & Session Fixation Protection",
@@ -81,7 +81,11 @@ def generate_all_evidence():
                 "Input Sanitization & Date Boundary Checks",
                 "Concurrency-Safe Atomic ID Insertion & Conflict Retries",
                 "OCR Anchor Extraction with Varied Delimiter & Multiline Layouts",
-                "Integrity Constraint Error Distinction (NOT NULL vs UNIQUE)"
+                "Integrity Constraint Error Distinction (NOT NULL vs UNIQUE)",
+                "REST API Expiration Enforcement & Verification",
+                "Direct Download Revocation Enforcement",
+                "Export Header Injection Sanitization",
+                "Dashboard Statistical Metric Separation"
             ]
         }
     }

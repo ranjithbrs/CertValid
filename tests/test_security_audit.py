@@ -520,6 +520,134 @@ class SecurityAuditTestSuite(unittest.TestCase):
         with self.assertRaises(db.DuplicateBundleError):
             db.create_bundle("Transcript B", "Bundle Recipient", "b@test.com", "Test Inst", "2026-11-01", [cid], bundle_id=bid)
 
+    def test_ocr_name_matching_middle_initial(self):
+        """Positive: OCR parsing correctly handles recipient names with middle initials and periods."""
+        doc_text = (
+            "CERTIFICATE OF COMPLETION\n"
+            "This is proudly presented to: John F. Kennedy\n"
+            "for distinguished achievements in Public Policy.\n"
+            "Date: 2024-01-01\n"
+        )
+        cand = db.extract_anchor_recipient(doc_text)
+        self.assertEqual(cand, "John F. Kennedy")
+        is_match, sim, reason = db.verify_ocr_recipient_name(doc_text, "John F. Kennedy")
+        self.assertTrue(is_match, f"Failed OCR match for middle initial: {reason}")
+        self.assertGreaterEqual(sim, 0.90)
+
+    def test_api_verify_id_expired_rejection(self):
+        """Negative: REST API /api/v1/verify/id rejects expired certificate with status EXPIRED and valid=False."""
+        key_info = db.generate_api_key('Test Key Expired ID')
+        api_key = key_info['api_key']
+        cid = f"CERT-EXP-{uuid.uuid4().hex[:6].upper()}"
+        db.add_certificate(
+            student_name="Expired Student",
+            course_name="Ancient History",
+            issue_date="2020-01-01",
+            issuer_name="Test Issuer",
+            file_hash=hashlib.sha256(b"expired_seed_1").hexdigest(),
+            cert_id=cid,
+            expires_at="2021-01-01"
+        )
+        res = self.client.post('/api/v1/verify/id', json={'cert_id': cid}, headers={'X-API-Key': api_key})
+        self.assertEqual(res.status_code, 200)
+        data = res.get_json()
+        self.assertEqual(data.get('status'), 'EXPIRED')
+        self.assertFalse(data.get('valid'))
+        self.assertIn("Certificate expired", data.get('message', ''))
+
+    def test_api_verify_file_expired_rejection(self):
+        """Negative: REST API /api/v1/verify/file detects expired certificate and flags status EXPIRED."""
+        key_info = db.generate_api_key('Test Key Expired File')
+        api_key = key_info['api_key']
+        img = Image.new('RGB', (100, 100), color='blue')
+        buf = io.BytesIO()
+        img.save(buf, format='PNG')
+        file_bytes = buf.getvalue()
+        fhash = hashlib.sha256(file_bytes).hexdigest()
+        cid = f"CERT-EXP-{uuid.uuid4().hex[:6].upper()}"
+        db.add_certificate(
+            student_name="Expired Recipient",
+            course_name="Past Course",
+            issue_date="2020-01-01",
+            issuer_name="Test Issuer",
+            file_hash=fhash,
+            cert_id=cid,
+            expires_at="2021-01-01"
+        )
+        res = self.client.post('/api/v1/verify/file', data={
+            'certificate': (io.BytesIO(file_bytes), 'expired_cert.png')
+        }, headers={'X-API-Key': api_key}, content_type='multipart/form-data')
+        self.assertEqual(res.status_code, 200)
+        data = res.get_json()
+        self.assertEqual(data.get('status'), 'EXPIRED')
+        self.assertFalse(data.get('valid'))
+
+    def test_download_revoked_cert_blocked(self):
+        """Security: Direct PNG and PDF certificate downloads are blocked if certificate is revoked."""
+        cid = f"CERT-REV-{uuid.uuid4().hex[:6].upper()}"
+        db.add_certificate(
+            student_name="Revoked Recipient",
+            course_name="Security Testing",
+            issue_date="2026-11-01",
+            issuer_name="Security Authority",
+            file_hash=hashlib.sha256(b"revoked_file_seed").hexdigest(),
+            cert_id=cid
+        )
+        db.revoke_certificate(cid)
+
+        # 1. Direct PNG download
+        res_png = self.client.get(f'/download/{cid}', follow_redirects=False)
+        self.assertEqual(res_png.status_code, 302)
+        self.assertIn(f'/verify/{cid}', res_png.headers.get('Location', ''))
+
+        # 2. Direct PDF download
+        res_pdf = self.client.get(f'/download/pdf/{cid}', follow_redirects=False)
+        self.assertEqual(res_pdf.status_code, 302)
+        self.assertIn(f'/verify/{cid}', res_pdf.headers.get('Location', ''))
+
+    def test_download_revoked_transcript_blocked(self):
+        """Security: Direct transcript PDF download is blocked if bundle is revoked."""
+        cid = db.add_certificate(
+            student_name="Transcript Revoked Student",
+            course_name="Systems Engineering",
+            issue_date="2026-11-01",
+            issuer_name="University",
+            file_hash=hashlib.sha256(b"trans_rev_seed").hexdigest()
+        )
+        bid = f"TR-REV-{uuid.uuid4().hex[:6].upper()}"
+        db.create_bundle("Revoked Degree", "Transcript Revoked Student", "s@test.com", "University", "2026-11-01", [cid], bundle_id=bid)
+        db.revoke_bundle(bid)
+
+        res = self.client.get(f'/download/transcript/{bid}', follow_redirects=False)
+        self.assertEqual(res.status_code, 302)
+        self.assertIn(f'/transcript/{bid}', res.headers.get('Location', ''))
+
+    def test_admin_export_logs_sanitization(self):
+        """Security: Export log filenames sanitize invalid characters and CRLF injection."""
+        with self.client.session_transaction() as sess:
+            sess['admin_logged_in'] = True
+            sess['admin_user'] = 'testsuperadmin'
+            sess['admin_role'] = 'superadmin'
+
+        res = self.client.get('/admin/logs/export/csv?status=INJECTED%0D%0AHeader-Test:1')
+        self.assertEqual(res.status_code, 200)
+        cd = res.headers.get('Content-Disposition', '')
+        self.assertIn('CertValid_Audit_Logs_ALL_', cd)
+        self.assertNotIn('INJECTED', cd)
+
+    def test_stats_expired_separation(self):
+        """Logic: Dashboard statistics cleanly separate active, expired, and revoked credentials."""
+        today = datetime.now().strftime('%Y-%m-%d')
+        c_active = db.add_certificate("Active Student", "Active Course", today, "Inst", hashlib.sha256(b"act_seed").hexdigest(), expires_at="2099-01-01")
+        c_exp = db.add_certificate("Expired Student", "Expired Course", "2020-01-01", "Inst", hashlib.sha256(b"exp_seed").hexdigest(), expires_at="2021-01-01")
+        c_rev = db.add_certificate("Revoked Student", "Revoked Course", today, "Inst", hashlib.sha256(b"rev_seed").hexdigest())
+        db.revoke_certificate(c_rev)
+
+        stats = db.get_stats()
+        self.assertGreaterEqual(stats['active_certs'], 1)
+        self.assertGreaterEqual(stats['expired_certs'], 1)
+        self.assertGreaterEqual(stats['revoked_certs'], 1)
+
 
 if __name__ == '__main__':
     unittest.main()

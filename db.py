@@ -580,13 +580,13 @@ def extract_anchor_recipient(doc_text: str) -> str | None:
         r'(?:\s*(?:dr|mr|mrs|ms|prof|mx)\.?\s+)?'
     )
 
-    stop_delims = (
-        r'(?=\s+(?:has|for|on|in|who|by|with|completed|successfully|achieved|graduated|'
-        r'fulfilled|satisfied|demonstrated|passed|participated|\d|\n|$|[,;]|\.(?:\s+|$)))'
+    lookahead = (
+        r'(?=(?:[ \t]+(?:has|for|on|in|who|by|with|completed|successfully|achieved|graduated|'
+        r'fulfilled|satisfied|demonstrated|passed|participated|\d)|[\r\n,;]|(?<!\b[A-Za-z])\.(?:\s+|$)|$))'
     )
 
     # Strategy 1: Anchor followed by recipient on the same line with a stop delimiter lookahead
-    p1 = anchor_prefix + r'\s*([^\W\d_ \t\.\'\-]{1,30}(?:[ \t\.\'\-]+[^\W\d_ \t\.\'\-]{1,30}){0,5}?)\s*' + stop_delims
+    p1 = anchor_prefix + r'\s*([^\W\d_ \t\.\'\-]{1,30}(?:[ \t\.\'\-]+[^\W\d_ \t\.\'\-]{1,30}){0,5}?)\s*' + lookahead
     m1 = re.search(p1, clean_text, re.IGNORECASE)
     if m1 and m1.group(1).strip():
         cand = m1.group(1).strip().strip(' *~_=-|[]\t')
@@ -594,7 +594,7 @@ def extract_anchor_recipient(doc_text: str) -> str | None:
             return cand
 
     # Strategy 2: Anchor followed by candidate name on the same line without a stop delimiter
-    p2 = anchor_prefix + r'[ \t]+([^\W\d_ \t\.\'\-]{1,30}(?:[ \t\.\'\-]+[^\W\d_ \t\.\'\-]{1,30}){0,5}?)(?:\r?\n|$|[,;]|\.(?:\s+|$))'
+    p2 = anchor_prefix + r'[ \t]+([^\W\d_ \t\.\'\-]{1,30}(?:[ \t\.\'\-]+[^\W\d_ \t\.\'\-]{1,30}){0,5}?)(?:[\r\n,;]|(?<!\b[A-Za-z])\.(?:\s+|$)|$)'
     m2 = re.search(p2, clean_text, re.IGNORECASE)
     if m2 and m2.group(1).strip():
         cand = m2.group(1).strip().strip(' *~_=-|[]\t')
@@ -602,7 +602,7 @@ def extract_anchor_recipient(doc_text: str) -> str | None:
             return cand
 
     # Strategy 3: Multi-line layout (anchor on one line, recipient on subsequent line)
-    p3 = anchor_prefix + r'(?:\r?\n)+[ \t\-_=\*~|]*([^\W\d_ \t\.\'\-]{1,30}(?:[ \t\.\'\-]+[^\W\d_ \t\.\'\-]{1,30}){0,5}?)[ \t\-_=\*~|]*(?:\r?\n|$)'
+    p3 = anchor_prefix + r'(?:\r?\n)+[ \t\-_=\*~|]*([^\W\d_ \t\.\'\-]{1,30}(?:[ \t\.\'\-]+[^\W\d_ \t\.\'\-]{1,30}){0,5}?)[ \t\-_=\*~|]*(?:[\r\n]|$)'
     m3 = re.search(p3, clean_text, re.IGNORECASE)
     if m3 and m3.group(1).strip():
         cand = m3.group(1).strip().strip(' *~_=-|[]\t')
@@ -1207,21 +1207,24 @@ def get_all_logs(limit=500, status_filter=None):
 def get_stats():
     """Get dashboard statistics using a single DB connection and aggregate queries."""
     conn = get_db()
+    today_str = datetime.now().strftime('%Y-%m-%d')
 
     cert_row = conn.execute('''
         SELECT
             COUNT(*) AS total_certs,
-            SUM(CASE WHEN status = 'active'  THEN 1 ELSE 0 END) AS active_certs,
+            SUM(CASE WHEN status = 'active' AND (expires_at IS NULL OR expires_at >= ?) THEN 1 ELSE 0 END) AS active_certs,
+            SUM(CASE WHEN status = 'active' AND (expires_at IS NOT NULL AND expires_at < ?) THEN 1 ELSE 0 END) AS expired_certs,
             SUM(CASE WHEN status = 'revoked' THEN 1 ELSE 0 END) AS revoked_certs
         FROM certificates
-    ''').fetchone()
+    ''', (today_str, today_str)).fetchone()
 
     log_row = conn.execute('''
         SELECT
             COUNT(*) AS total_verifications,
             SUM(CASE WHEN status = 'AUTHENTIC' THEN 1 ELSE 0 END) AS authentic_verifications,
             SUM(CASE WHEN status IN ('INVALID', 'TAMPERED') THEN 1 ELSE 0 END) AS failed_verifications,
-            SUM(CASE WHEN status = 'REVOKED'   THEN 1 ELSE 0 END) AS revoked_verifications
+            SUM(CASE WHEN status = 'REVOKED'   THEN 1 ELSE 0 END) AS revoked_verifications,
+            SUM(CASE WHEN status = 'EXPIRED'   THEN 1 ELSE 0 END) AS expired_verifications
         FROM verification_logs
     ''').fetchone()
 
@@ -1230,11 +1233,13 @@ def get_stats():
     return {
         'total_certs':             cert_row['total_certs']             or 0,
         'active_certs':            cert_row['active_certs']            or 0,
+        'expired_certs':           cert_row['expired_certs']           or 0,
         'revoked_certs':           cert_row['revoked_certs']           or 0,
         'total_verifications':     log_row['total_verifications']      or 0,
         'authentic_verifications': log_row['authentic_verifications']  or 0,
         'failed_verifications':    log_row['failed_verifications']     or 0,
         'revoked_verifications':   log_row['revoked_verifications']    or 0,
+        'expired_verifications':   log_row['expired_verifications']    or 0,
     }
 
 
