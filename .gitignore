@@ -15,12 +15,17 @@ env/
 
 # Flask / App specific
 database.db
+*.sqlite
+*.sqlite3
 instance/
-static/uploads/
-static/certs/
+static/uploads/*
+!static/uploads/.gitkeep
+static/certs/*
+!static/certs/.gitkeep
+scratch/
 
 # IDE / OS
-.vscode/settings.json
+.vscode/
 .idea/
 *.swp
 *.swo
